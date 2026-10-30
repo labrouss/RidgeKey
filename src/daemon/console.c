@@ -40,8 +40,9 @@ console_get_state (void)
               !dict_bool (d, CFSTR ("kCGSSessionOnConsoleKey")))
             continue;
           uidv = CFDictionaryGetValue (d, CFSTR ("kCGSSessionUserIDKey"));
+          /* uid < 500: system accounts such as _windowserver (88) own the login window */
           if (uidv && CFGetTypeID (uidv) == CFNumberGetTypeID () &&
-              CFNumberGetValue ((CFNumberRef) uidv, kCFNumberIntType, &uid) && uid >= 0)
+              CFNumberGetValue ((CFNumberRef) uidv, kCFNumberIntType, &uid) && uid >= 500)
             {
               s.uid = (uid_t) uid;
               s.locked = dict_bool (d, CFSTR ("CGSSessionScreenIsLocked"));

@@ -802,6 +802,26 @@ do_password_set (Request *r)
   reply_send (r, reply);
 }
 
+static void
+do_agent_hello (Request *r)
+{
+  g_autoptr(GError) err = NULL;
+  uid_t euid = 0;
+  pid_t pid = 0;
+  xpc_object_t reply;
+
+  if (!peer_is_agent (r->conn, &euid, &pid, &err))
+    {
+      g_warning ("agent check FAILED for pid %d (uid %u): %s", (int) pid, (unsigned) euid, err->message);
+      reply_error (r, RK_ERR_PERMISSION, "%s", err->message);
+      return;
+    }
+  g_message ("agent verified: pid %d, uid %u", (int) pid, (unsigned) euid);
+  reply = reply_new (r);
+  xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
+  reply_send (r, reply);
+}
+
 /* Only the verified agent, for the console user, while the screen is locked. */
 static void
 do_unlock (Request *r)
@@ -932,6 +952,8 @@ handle_request (gpointer data)
     do_password_clear (r);
   else if (strcmp (op, RK_OP_PASSWORD_CHECK) == 0)
     do_password_check (r);
+  else if (strcmp (op, RK_OP_AGENT_HELLO) == 0)
+    do_agent_hello (r);
   else if (strcmp (op, RK_OP_ENROLL) == 0)
     return (start_op (r, OP_ENROLL), G_SOURCE_REMOVE);
   else if (strcmp (op, RK_OP_VERIFY) == 0)

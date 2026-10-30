@@ -73,8 +73,17 @@ sleep 1
 echo "==> Installing the lock-screen agent $AGENT"
 install -o root -g wheel -m 644 "$SRC/launchd/$AGENT.plist" "$AGENT_PLIST"
 if [ "$CONSOLE_UID" != 0 ]; then
-  launchctl bootstrap "gui/$CONSOLE_UID" "$AGENT_PLIST" 2>/dev/null \
-    || echo "    (agent will start at your next login)"
+  launchctl bootout "gui/$CONSOLE_UID/$AGENT" 2>/dev/null || true
+  if ! launchctl bootstrap "gui/$CONSOLE_UID" "$AGENT_PLIST"; then
+    echo "    bootstrap into gui/$CONSOLE_UID failed - the agent will start at your next login"
+  fi
+  launchctl kickstart -k "gui/$CONSOLE_UID/$AGENT" 2>/dev/null || true
+  sleep 1
+  if launchctl print "gui/$CONSOLE_UID/$AGENT" 2>/dev/null | grep -q 'state = running'; then
+    echo "    agent running"
+  else
+    echo "    WARNING: agent not running - see: launchctl print gui/$CONSOLE_UID/$AGENT"
+  fi
 fi
 
 echo "==> Status"

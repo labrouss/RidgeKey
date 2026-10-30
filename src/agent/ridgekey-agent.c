@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pwd.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -306,7 +307,8 @@ screen_locked_now (void)
 int
 main (int argc, char **argv)
 {
-  const char *home = getenv ("HOME");
+  struct passwd *me = getpwuid (getuid ());
+  const char *home = me && me->pw_dir ? me->pw_dir : getenv ("HOME");
   const void *keys[] = { kAXTrustedCheckOptionPrompt };
   const void *vals[] = { kCFBooleanTrue };
   CFDictionaryRef ax_opts;
@@ -342,6 +344,23 @@ main (int argc, char **argv)
       logf_ ("ridgekeyd restarted");
   });
   xpc_connection_resume (conn);
+
+  /* Ask ridgekeyd to check us now, so a signature/permission problem shows up in both logs
+   * at login instead of at the first lock. */
+  {
+    xpc_object_t hello = xpc_dictionary_create (NULL, NULL, 0);
+
+    xpc_dictionary_set_string (hello, RK_KEY_OP, RK_OP_AGENT_HELLO);
+    xpc_connection_send_message_with_reply (conn, hello, q, ^(xpc_object_t reply) {
+      if (xpc_get_type (reply) != XPC_TYPE_DICTIONARY)
+        logf_ ("ridgekeyd not reachable yet");
+      else if (xpc_dictionary_get_bool (reply, RK_KEY_OK))
+        logf_ ("ridgekeyd accepted this agent");
+      else
+        logf_ ("ridgekeyd REFUSED this agent: %s", xpc_dictionary_get_string (reply, RK_KEY_MESSAGE));
+    });
+    xpc_release (hello);
+  }
 
   dc = CFNotificationCenterGetDistributedCenter ();
   CFNotificationCenterAddObserver (dc, NULL, on_notification, CFSTR ("com.apple.screenIsLocked"),

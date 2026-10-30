@@ -39,7 +39,7 @@
 
 #include <string.h>
 
-#define RK_VERSION        "0.4.0"
+#define RK_VERSION        "0.4.1"
 #define RK_SERVICE_NAME   "io.github.labrouss.ridgekey"
 
 /* The only program allowed to receive the stored password (op "unlock"). */
@@ -87,6 +87,7 @@
 #define RK_OP_PASSWORD_SET   "password-set"    /* own user, root: any - validated first */
 #define RK_OP_PASSWORD_CLEAR "password-clear"  /* own user, root: any */
 #define RK_OP_PASSWORD_CHECK "password-check"  /* own user, root: any - reads it back and re-checks it */
+#define RK_OP_AGENT_HELLO "agent-hello" /* the agent at startup: runs the agent checks, logs the result */
 #define RK_OP_UNLOCK    "unlock"    /* the RidgeKey agent only (see peer.c), for the console user while
                                      * the screen is locked: wait for a matching finger, then reply
                                      * with "password" so the agent can type it into the lock screen */

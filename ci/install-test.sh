@@ -68,6 +68,12 @@ expect_out "permission" "root is not the agent either"
 CU="$(stat -f %u /dev/console)"
 if [ "$CU" != 0 ]; then
   expect_rc 0 "agent loaded in the console user's GUI session" sudo launchctl print "gui/$CU/io.github.labrouss.ridgekey.agent"
+  sleep 2
+  if sudo grep -q "agent verified" /Library/Logs/RidgeKey/ridgekeyd.log; then
+    pass "daemon verified the running agent (path, signature, hardened runtime, root-owned)"
+  else
+    fail "daemon did not verify the agent"; sudo grep -i agent /Library/Logs/RidgeKey/ridgekeyd.log || true
+  fi
 else
   echo "  skip no GUI user on the console"
 fi
