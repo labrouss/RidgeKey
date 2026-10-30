@@ -29,6 +29,7 @@
 
 #include "ridgekey-protocol.h"
 #include "console.h"
+#include "peer.h"
 #include "secret.h"
 #include "store.h"
 
@@ -107,9 +108,9 @@ reply_error (Request *r, const char *code, const char *fmt, ...)
 /* ------------------------------------------------------------------------------------------ */
 /* Daemon state                                                                                */
 
-typedef enum { OP_ENROLL, OP_VERIFY, OP_IDENTIFY, OP_DELETE, OP_PURGE } OpKind;
+typedef enum { OP_ENROLL, OP_VERIFY, OP_IDENTIFY, OP_DELETE, OP_PURGE, OP_UNLOCK } OpKind;
 
-static const char *const op_names[] = { "enroll", "verify", "identify", "delete", "purge" };
+static const char *const op_names[] = { "enroll", "verify", "identify", "delete", "purge", "unlock" };
 
 typedef struct {
   OpKind        kind;
@@ -132,6 +133,7 @@ typedef struct {
   gint64        purge_deleted;
 
   GError       *error;          /* final error, if any */
+  const char   *err_code;       /* overrides the code derived from error */
 } Op;
 
 static FpContext *ctx;
@@ -153,6 +155,8 @@ send_event (Op *op, xpc_object_t ev)
 static const char *
 error_code (Op *op, const GError *e)
 {
+  if (op->err_code)
+    return op->err_code;
   if (op->timed_out)
     return RK_ERR_TIMEOUT;
   if (g_error_matches (e, G_IO_ERROR, G_IO_ERROR_CANCELLED))
@@ -374,6 +378,41 @@ op_run_enroll (Op *op)
 /* ------------------------------------------------------------------------------------------ */
 /* verify / identify                                                                           */
 
+/* Unlock: after a match for the locked console user, hand the stored password to the agent. */
+static void
+release_password (Op *op)
+{
+  ConsoleState cs = console_get_state ();
+  GError *err = NULL;
+  char *pw;
+
+  if (cs.uid != op->uid || !cs.locked)
+    {
+      op->err_code = RK_ERR_NOT_LOCKED;
+      op_finish (op, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_FAILED,
+                                          "the screen is no longer locked for this user"));
+      return;
+    }
+  pw = secret_load (op->username, &err);
+  if (!pw)
+    {
+      op->err_code = g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND) ? RK_ERR_NO_PASSWORD : RK_ERR_STORAGE;
+      op_finish (op, err);
+      return;
+    }
+  if (!secret_validate (op->username, pw, &err))
+    {
+      secret_free (pw);
+      op->err_code = RK_ERR_PASSWORD_OUTDATED;
+      op_finish (op, err);
+      return;
+    }
+  xpc_dictionary_set_string (op->reply, RK_KEY_PASSWORD, pw);
+  secret_free (pw);
+  g_message ("unlock: fingerprint matched for %s - password released to the agent", op->username);
+  op_finish (op, NULL);
+}
+
 static void
 on_identified (GObject *src, GAsyncResult *res, gpointer data)
 {
@@ -408,6 +447,11 @@ on_identified (GObject *src, GAsyncResult *res, gpointer data)
       xpc_dictionary_set_string (op->reply, RK_KEY_FINGER, rk_finger_name (fp_print_get_finger (match)));
       g_message ("%s: matched %s / %s", op_names[op->kind], pw ? pw->pw_name : "?",
                  rk_finger_name (fp_print_get_finger (match)));
+      if (op->kind == OP_UNLOCK)
+        {
+          release_password (op);
+          return;
+        }
     }
   op_finish (op, NULL);
 }
@@ -500,7 +544,8 @@ on_opened (GObject *src, GAsyncResult *res, gpointer data)
     {
     case OP_ENROLL:   op_run_enroll (op); break;
     case OP_VERIFY:
-    case OP_IDENTIFY: op_run_identify (op); break;
+    case OP_IDENTIFY:
+    case OP_UNLOCK:   op_run_identify (op); break;
     case OP_DELETE:   fp_device_delete_print (op->dev, op->old_print, op->cancel, on_deleted, op); break;
     case OP_PURGE:    purge_next (op); break;
     }
@@ -607,10 +652,11 @@ start_op (Request *r, OpKind kind)
 
     case OP_VERIFY:
     case OP_IDENTIFY:
+    case OP_UNLOCK:
       {
         gint64 t = xpc_dictionary_get_int64 (r->msg, RK_KEY_TIMEOUT);
 
-        op->gallery = kind == OP_VERIFY ? store_load_user (op->uid) : store_load_all ();
+        op->gallery = kind == OP_IDENTIFY ? store_load_all () : store_load_user (op->uid);
         if (op->gallery->len == 0)
           {
             reply_error (r, RK_ERR_NO_PRINTS, "no enrolled RidgeKey prints for %s", op->username);
@@ -756,6 +802,40 @@ do_password_set (Request *r)
   reply_send (r, reply);
 }
 
+/* Only the verified agent, for the console user, while the screen is locked. */
+static void
+do_unlock (Request *r)
+{
+  g_autoptr(GError) err = NULL;
+  uid_t euid = 0;
+  pid_t pid = 0;
+  ConsoleState cs;
+  struct passwd *pw;
+
+  if (!peer_is_agent (r->conn, &euid, &pid, &err))
+    {
+      g_warning ("unlock refused for pid %d: %s", (int) pid, err->message);
+      reply_error (r, RK_ERR_PERMISSION, "%s", err->message);
+      request_free (r);
+      return;
+    }
+  cs = console_get_state ();
+  if (cs.uid != euid || !cs.locked)
+    {
+      reply_error (r, RK_ERR_NOT_LOCKED, "the screen is not locked for uid %u", (unsigned) euid);
+      request_free (r);
+      return;
+    }
+  pw = getpwuid (euid);
+  if (!pw || !secret_exists (pw->pw_name))
+    {
+      reply_error (r, RK_ERR_NO_PASSWORD, "no stored password - run: ridgekeyctl password set");
+      request_free (r);
+      return;
+    }
+  start_op (r, OP_UNLOCK);
+}
+
 static void
 do_password_check (Request *r)
 {
@@ -862,6 +942,8 @@ handle_request (gpointer data)
     return (start_op (r, OP_DELETE), G_SOURCE_REMOVE);
   else if (strcmp (op, RK_OP_PURGE) == 0)
     return (start_op (r, OP_PURGE), G_SOURCE_REMOVE);
+  else if (strcmp (op, RK_OP_UNLOCK) == 0)
+    return (do_unlock (r), G_SOURCE_REMOVE);
   else
     reply_error (r, RK_ERR_BAD_REQUEST, "unknown op \"%s\"", op);
 

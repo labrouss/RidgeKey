@@ -228,7 +228,7 @@ mkdir -p "$BUNDLE/lib/pkgconfig"
 for pc in "$PREFIX"/lib/pkgconfig/*.pc; do
   sed "s|^prefix=.*|prefix=\${pcfiledir}/../..|" "$pc" > "$BUNDLE/lib/pkgconfig/$(basename "$pc")"
 done
-for b in ridgekeyd ridgekeyctl ridgekey-pamcheck ridgekey-typetest; do
+for b in ridgekeyd ridgekeyctl ridgekey-pamcheck ridgekey-typetest ridgekey-agent; do
   [ -x "$PREFIX/bin/$b" ] || die "$b not built"
   cp "$PREFIX/bin/$b" "$BUNDLE/bin/"
 done
@@ -242,6 +242,16 @@ for ex in $EXAMPLES; do
   cp "$WORK/libfprint/_build/examples/$ex" "$BUNDLE/bin/"
 done
 relocate "$BUNDLE"
+
+# The agent receives the stored password: hardened runtime (no DYLD injection / debugger
+# attach), fixed identifier. ridgekeyd refuses agents without the runtime flag.
+codesign --force --sign - --options runtime --identifier io.github.labrouss.ridgekey.agent \
+  "$BUNDLE/bin/ridgekey-agent" >/dev/null 2>&1 || die "codesign failed for ridgekey-agent"
+codesign -dv "$BUNDLE/bin/ridgekey-agent" 2>&1 | grep -q 'flags=.*runtime' || die "ridgekey-agent lacks the hardened runtime"
+for d in $(otool -L "$BUNDLE/bin/ridgekey-agent" | tail -n +2 | awk '{print $1}'); do
+  case "$d" in /usr/lib/*|/System/*) ;; *) die "ridgekey-agent links $d - must use system libraries only" ;; esac
+done
+echo "    ridgekey-agent: hardened runtime, system libraries only"
 
 # PAM module: loaded into sudo, so it must depend on system libraries only.
 mkdir -p "$BUNDLE/lib/pam"

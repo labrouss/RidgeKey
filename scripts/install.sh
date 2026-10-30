@@ -7,12 +7,16 @@
 #   /usr/local/ridgekey/lib/pam/pam_ridgekey.so         PAM module (sudo is NOT changed - run
 #                                                       'sudo ridgekey-sudo enable' for that)
 #   /Library/LaunchDaemons/io.github.labrouss.ridgekey.plist
+#   /Library/LaunchAgents/io.github.labrouss.ridgekey.agent.plist   lock-screen agent (per user)
 #   /Library/Logs/RidgeKey/                             daemon log
 #   /Library/Application Support/RidgeKey/prints/       print record (created by the daemon, 0700)
 # Re-running upgrades in place; the print record is kept.
 set -euo pipefail
 
 LABEL="io.github.labrouss.ridgekey"
+AGENT="$LABEL.agent"
+AGENT_PLIST="/Library/LaunchAgents/$AGENT.plist"
+CONSOLE_UID="$(stat -f %u /dev/console)"
 DEST="/usr/local/ridgekey"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
 SRC="$(cd "$(dirname "$0")" && pwd)"
@@ -24,6 +28,10 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 echo "==> Checking the bundle"
 "$SRC/bin/ridgekeyd" --version
 
+if [ "$CONSOLE_UID" != 0 ] && launchctl print "gui/$CONSOLE_UID/$AGENT" >/dev/null 2>&1; then
+  echo "==> Stopping the lock-screen agent"
+  launchctl bootout "gui/$CONSOLE_UID/$AGENT" 2>/dev/null || true
+fi
 if launchctl print "system/$LABEL" >/dev/null 2>&1; then
   echo "==> Stopping the running daemon"
   launchctl bootout "system/$LABEL" 2>/dev/null || true
@@ -62,6 +70,13 @@ launchctl bootstrap system "$PLIST"
 launchctl kickstart -k "system/$LABEL" 2>/dev/null || true
 sleep 1
 
+echo "==> Installing the lock-screen agent $AGENT"
+install -o root -g wheel -m 644 "$SRC/launchd/$AGENT.plist" "$AGENT_PLIST"
+if [ "$CONSOLE_UID" != 0 ]; then
+  launchctl bootstrap "gui/$CONSOLE_UID" "$AGENT_PLIST" 2>/dev/null \
+    || echo "    (agent will start at your next login)"
+fi
+
 echo "==> Status"
 /usr/local/bin/ridgekeyctl status || {
   echo "ridgekeyd did not answer - see /Library/Logs/RidgeKey/ridgekeyd.log"; exit 1; }
@@ -73,5 +88,10 @@ Installed. Try (as your normal user, no sudo):
   ridgekeyctl verify
   ridgekeyctl list
 Fingerprint for sudo (optional, password still works):  sudo ridgekey-sudo enable
+Lock screen: 1) ridgekeyctl password set
+             2) System Settings -> Privacy & Security -> Accessibility -> enable ridgekey-agent
+                (after an upgrade, remove it with "-" and add it again with "+"; it is in
+                 /usr/local/ridgekey/bin)
+             3) lock the screen (Ctrl-Cmd-Q) and touch the sensor
 Log: /Library/Logs/RidgeKey/ridgekeyd.log      Uninstall: sudo ./uninstall.sh [--purge]
 EOF

@@ -40,6 +40,12 @@ if [ $PURGE = 1 ]; then
   fi
 fi
 
+AGENT="$LABEL.agent"
+CONSOLE_UID="$(stat -f %u /dev/console)"
+echo "==> Stopping and removing the lock-screen agent"
+[ "$CONSOLE_UID" != 0 ] && launchctl bootout "gui/$CONSOLE_UID/$AGENT" 2>/dev/null || true
+rm -f "/Library/LaunchAgents/$AGENT.plist"
+
 echo "==> Stopping and removing the daemon"
 launchctl bootout "system/$LABEL" 2>/dev/null || true
 rm -f "$PLIST"

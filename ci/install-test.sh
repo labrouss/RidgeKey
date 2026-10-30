@@ -56,6 +56,22 @@ expect_rc 2 "unknown finger rejected by client" ridgekeyctl enroll left-toe
 expect_rc 0 "purge with nothing recorded" sudo ridgekeyctl purge --yes
 expect_out "deleted 0" "purge deletes nothing"
 
+echo "== lock-screen agent"
+AG=/usr/local/ridgekey/bin/ridgekey-agent
+expect_rc 0 "agent runs" "$AG" --version
+expect_rc 0 "agent signature" codesign -dv "$AG"
+expect_out "runtime" "agent has the hardened runtime"
+expect_rc 1 "unlock refused for ridgekeyctl (not the agent)" ridgekeyctl unlock
+expect_out "permission" "only the agent may unlock"
+expect_rc 1 "unlock refused for root too" sudo ridgekeyctl unlock
+expect_out "permission" "root is not the agent either"
+CU="$(stat -f %u /dev/console)"
+if [ "$CU" != 0 ]; then
+  expect_rc 0 "agent loaded in the console user's GUI session" sudo launchctl print "gui/$CU/io.github.labrouss.ridgekey.agent"
+else
+  echo "  skip no GUI user on the console"
+fi
+
 echo "== console state"
 expect_rc 0 "status shows the console" ridgekeyctl status
 expect_out "^console:" "console line present"

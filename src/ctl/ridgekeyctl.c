@@ -272,7 +272,7 @@ main (int argc, char **argv)
   if (strcmp (op, RK_OP_STATUS) && strcmp (op, RK_OP_LIST) && strcmp (op, RK_OP_ENROLL) &&
       strcmp (op, RK_OP_VERIFY) && strcmp (op, RK_OP_IDENTIFY) && strcmp (op, RK_OP_DELETE) &&
       strcmp (op, RK_OP_PURGE) && strcmp (op, RK_OP_PASSWORD_SET) && strcmp (op, RK_OP_PASSWORD_CLEAR) &&
-      strcmp (op, RK_OP_PASSWORD_CHECK))
+      strcmp (op, RK_OP_PASSWORD_CHECK) && strcmp (op, RK_OP_UNLOCK))   /* unlock: test only, always refused */
     {
       fprintf (stderr, "unknown command: %s\n\n", op);
       usage (stderr);

@@ -32,14 +32,18 @@
  *     verify / identify: "matched" bool, and when matched: "user" string, "finger" string
  *     purge:    "deleted" int64
  *     password-check: "password-stored" bool, "password-valid" bool
+ *     unlock:   "matched" bool; when matched also "password" string (agent only)
  */
 #ifndef RIDGEKEY_PROTOCOL_H
 #define RIDGEKEY_PROTOCOL_H
 
 #include <string.h>
 
-#define RK_VERSION        "0.3.0"
+#define RK_VERSION        "0.4.0"
 #define RK_SERVICE_NAME   "io.github.labrouss.ridgekey"
+
+/* The only program allowed to receive the stored password (op "unlock"). */
+#define RK_AGENT_PATH     "/usr/local/ridgekey/bin/ridgekey-agent"
 
 /* verify / identify wait at most this long for a finger */
 #define RK_TIMEOUT_MAX_SECONDS 120
@@ -83,6 +87,9 @@
 #define RK_OP_PASSWORD_SET   "password-set"    /* own user, root: any - validated first */
 #define RK_OP_PASSWORD_CLEAR "password-clear"  /* own user, root: any */
 #define RK_OP_PASSWORD_CHECK "password-check"  /* own user, root: any - reads it back and re-checks it */
+#define RK_OP_UNLOCK    "unlock"    /* the RidgeKey agent only (see peer.c), for the console user while
+                                     * the screen is locked: wait for a matching finger, then reply
+                                     * with "password" so the agent can type it into the lock screen */
 
 /* events */
 #define RK_EV_FINGER          "finger"
@@ -102,6 +109,9 @@
 #define RK_ERR_STORAGE     "storage"
 #define RK_ERR_FAILED      "failed"
 #define RK_ERR_BAD_PASSWORD "bad-password"
+#define RK_ERR_NO_PASSWORD  "no-password"         /* unlock: nothing stored */
+#define RK_ERR_PASSWORD_OUTDATED "password-outdated" /* unlock: stored one no longer works */
+#define RK_ERR_NOT_LOCKED   "not-locked"          /* unlock: not the locked console user */
 
 /* Finger names, indexed by libfprint's FpFinger (1..10). Index 0 = unknown. */
 static const char *const rk_finger_names[] = {

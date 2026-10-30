@@ -38,7 +38,44 @@ sudo ridgekeyctl -u alice list     act on another user
 ```
 Add `-v` to see finger on/off events. Ctrl-C cancels. Exit code 3 = daemon not reachable.
 
-## Lock-screen password (preparation for lock-screen unlock)
+## Lock-screen unlock
+
+1. `ridgekeyctl password set`: store your login password (see below).
+2. **System Settings → Privacy & Security → Accessibility** → enable **ridgekey-agent**
+   (`/usr/local/ridgekey/bin/ridgekey-agent`). After an upgrade, remove it with "−" and add it
+   again with "+"; the build is signed without a developer certificate, so macOS treats each
+   build as a new app.
+3. Lock the screen (Ctrl-Cmd-Q) and touch the sensor.
+
+**How it works:**
+- `ridgekey-agent` runs in your login session (LaunchAgent). When the screen locks it asks
+  `ridgekeyd` to wait for a finger.
+- After a match, the agent wakes the display, types your password into Apple's own lock
+  screen, presses Return, and wipes its copy. The native lock screen stays in charge, so your
+  login keychain unlocks as usual.
+- If the typed password doesn't unlock the screen (for example the display was still waking),
+  touch the sensor again.
+- After 5 wrong fingers it stops for that lock; type your password as usual.
+
+**When the daemon releases the password:**
+
+| Check | Done by |
+|---|---|
+| The caller is `/usr/local/ridgekey/bin/ridgekey-agent`, identified from the connection's audit token | `ridgekeyd` |
+| Its code signature is valid and uses the hardened runtime (no DYLD injection or debugger attach) | `ridgekeyd` |
+| The agent and every folder above it are owned by root and not writable by others | `ridgekeyd` |
+| The caller is the console user, and macOS reports that user's screen locked (IORegistry) | `ridgekeyd` |
+| A finger matched that user's RidgeKey prints in this same request | `ridgekeyd` |
+| The stored password still works (PAM `checkpw`) | `ridgekeyd` |
+
+Anything else, including `ridgekeyctl` and root itself, gets `permission`. Agent log:
+`~/Library/Logs/RidgeKey-agent.log` (it never contains the password).
+
+**Caveat:** with SIP disabled (common on hackintoshes), root and kernel extensions can get
+around these process checks. That doesn't matter much here, since root can read the System
+keychain anyway.
+
+## Lock-screen password
 
 ```sh
 ridgekeyctl password set       # asks for your login password (no echo)
@@ -127,11 +164,12 @@ the `finger`, `enroll-progress` and `retry` events, reply fields, and error code
 `no-device`, `permission`, `not-found`, `no-prints`, `timeout`, `cancelled`, `data-full`, `storage`,
 `failed`, `bad-request`).
 
-## Known limitations (0.3.0)
+## Known limitations (0.4.0)
 
 - **Callers are identified by their effective uid** (`xpc_connection_get_euid`). A later version
   should check code signatures, for example to allow only the RidgeKey app to enroll.
 - **Enroll needs no password:** any process running as you can start an enrollment, but it still
   needs a finger on the sensor. The GUI will ask for your password first.
-- **The lock screen isn't unlocked yet.** 0.3.0 stores the password and tracks the lock state;
-  typing it after a match comes next.
+- **Accessibility permission has to be granted again after every upgrade** (ad-hoc signing).
+- **The login window after a reboot (FileVault / first login) isn't covered;** that needs the
+  password typed by hand once.
