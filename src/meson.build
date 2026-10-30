@@ -1,7 +1,7 @@
 # RidgeKey - daemon and command-line client
 # SPDX-License-Identifier: MIT
 project('ridgekey', 'c',
-  version: '0.2.0',
+  version: '0.2.1',
   license: 'MIT',
   meson_version: '>= 0.59.0',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=debugoptimized'])
@@ -52,4 +52,11 @@ shared_module('pam_ridgekey',
 executable('ridgekey-pamcheck',
   ['tools/ridgekey-pamcheck.c'],
   dependencies: [pam_dep],
+  install: true)
+
+# Feasibility test for lock-screen password typing (types a dummy word, never Return).
+appsvc_dep = dependency('appleframeworks', modules: ['ApplicationServices', 'CoreFoundation'])
+executable('ridgekey-typetest',
+  ['tools/ridgekey-typetest.c'],
+  dependencies: [appsvc_dep],
   install: true)

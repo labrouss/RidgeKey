@@ -228,7 +228,7 @@ mkdir -p "$BUNDLE/lib/pkgconfig"
 for pc in "$PREFIX"/lib/pkgconfig/*.pc; do
   sed "s|^prefix=.*|prefix=\${pcfiledir}/../..|" "$pc" > "$BUNDLE/lib/pkgconfig/$(basename "$pc")"
 done
-for b in ridgekeyd ridgekeyctl ridgekey-pamcheck; do
+for b in ridgekeyd ridgekeyctl ridgekey-pamcheck ridgekey-typetest; do
   [ -x "$PREFIX/bin/$b" ] || die "$b not built"
   cp "$PREFIX/bin/$b" "$BUNDLE/bin/"
 done

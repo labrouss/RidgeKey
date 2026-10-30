@@ -33,7 +33,7 @@
 
 #include <string.h>
 
-#define RK_VERSION        "0.2.0"
+#define RK_VERSION        "0.2.1"
 #define RK_SERVICE_NAME   "io.github.labrouss.ridgekey"
 
 /* verify / identify wait at most this long for a finger */

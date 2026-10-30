@@ -810,6 +810,30 @@ on_signal (gpointer data)
   return G_SOURCE_CONTINUE;
 }
 
+/* "2026-10-30 22:29:25.983 [level] message" - one line per entry, for /Library/Logs. */
+static void
+log_handler (const gchar *domain, GLogLevelFlags level, const gchar *message, gpointer data)
+{
+  g_autoptr(GDateTime) now = g_date_time_new_now_local ();
+  g_autofree gchar *ts = g_date_time_format (now, "%Y-%m-%d %H:%M:%S");
+  const char *lvl = "info";
+
+  if (level & G_LOG_LEVEL_DEBUG)
+    {
+      if (!g_getenv ("RIDGEKEYD_DEBUG"))
+        return;
+      lvl = "debug";
+    }
+  else if (level & (G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL))
+    lvl = "error";
+  else if (level & G_LOG_LEVEL_WARNING)
+    lvl = "warning";
+  fprintf (stderr, "%s.%03d [%s] %s%s%s\n", ts, g_date_time_get_microsecond (now) / 1000, lvl,
+           domain && strcmp (domain, G_LOG_DOMAIN) ? domain : "",
+           domain && strcmp (domain, G_LOG_DOMAIN) ? ": " : "", message);
+  fflush (stderr);
+}
+
 static int
 run_probe (void)
 {
@@ -860,6 +884,12 @@ main (int argc, char **argv)
       return 0;
     }
 
+  if (!probe)
+    {
+      g_log_set_handler (G_LOG_DOMAIN, G_LOG_LEVEL_MASK | G_LOG_FLAG_FATAL | G_LOG_FLAG_RECURSION, log_handler, NULL);
+      g_log_set_default_handler (log_handler, NULL);
+    }
+
   ctx = fp_context_new ();
   if (probe)
     {
@@ -888,8 +918,9 @@ main (int argc, char **argv)
   xpc_connection_set_event_handler (listener, ^(xpc_object_t peer) {
     if (xpc_get_type (peer) == XPC_TYPE_CONNECTION)
       setup_peer ((xpc_connection_t) peer, queue);
-    else if (xpc_get_type (peer) == XPC_TYPE_ERROR)
+    else if (xpc_get_type (peer) == XPC_TYPE_ERROR && peer != XPC_ERROR_CONNECTION_INVALID)
       g_warning ("listener error: %s", xpc_dictionary_get_string (peer, XPC_ERROR_KEY_DESCRIPTION));
+    /* CONNECTION_INVALID is the expected result of cancelling the listener at shutdown */
   });
   xpc_connection_resume (listener);
 

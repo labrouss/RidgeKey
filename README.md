@@ -20,9 +20,15 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 | 1 | Reference capture on Linux (`linux/`), protocol notes (`docs/PROTOCOL-06cb-00f0.md`) | ✅ |
 | 2 | libfprint as a macOS library, with the example enroll/verify working against the 00f0 | ✅ |
 | 3 | `ridgekeyd` launchd daemon + `ridgekeyctl` client over XPC ([docs](docs/ridgekeyd.md)) | ✅ 0.1.0 tested on the 840 G8 (enroll, verify, identify, cancel, reboot) |
-| 4a | `sudo` with fingerprint: `pam_ridgekey.so` + `ridgekey-sudo` ([docs](docs/ridgekeyd.md#fingerprint-for-sudo)) | 🔧 0.2.0 |
-| 4b | Front-ends: SwiftUI settings and enrollment, lock-screen password typing, Authorization plugin | planned |
-| 5 | Stored passwords: encrypted, root-only APFS volume with its key in the System keychain | planned |
+| 4a | `sudo` with fingerprint: `pam_ridgekey.so` + `ridgekey-sudo` ([docs](docs/ridgekeyd.md#fingerprint-for-sudo)) | ✅ 0.2.0 tested: match, wrong finger, Ctrl-C |
+| 4b | Lock screen: after a match, type the stored password into Apple's own lock screen (keeps the native UI and unlocks the keychain) | 🔬 feasibility test (`ridgekey-typetest`) |
+| 4c | Stored password: encrypted, root-only; released only to type into the lock screen right after a match | planned (after 4b test) |
+| 4d | SwiftUI settings app and enrollment; Authorization plugin for admin password dialogs | planned |
+
+Why not an Authorization plugin for the lock screen? Since macOS 14 the lock screen uses its own
+modern UI. Getting a plugin to run there means reverting `system.login.screensaver` to the legacy
+UI, and developers report the keychain not unlocking, double lock screens and focus problems on
+Tahoe.
 
 ## Try it
 
