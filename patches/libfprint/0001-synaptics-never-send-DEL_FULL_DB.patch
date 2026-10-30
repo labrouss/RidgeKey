@@ -1,0 +1,42 @@
+From: RidgeKey (labrouss/RidgeKey)
+Subject: [PATCH 1/2] synaptics: never send BMKT_CMD_DEL_FULL_DB
+
+The sensor shares its print database with Windows Hello and the HP BIOS.
+DEL_FULL_DB wipes all of them. Unregister clear_storage and abort if the
+command is ever queued.
+
+License: LGPL-2.1-or-later (modifies libfprint).
+---
+--- a/libfprint/drivers/synaptics/synaptics.c
++++ b/libfprint/drivers/synaptics/synaptics.c
+@@ -390,6 +390,10 @@
+    *  - a state machine is already running, continued command */
+   g_assert (payload || payload_len == 0);
+ 
++  /* ridgekey: hard stop - whatever code path asks for it, this command never reaches the sensor. */
++  if (msg_id == BMKT_CMD_DEL_FULL_DB)
++    g_error ("ridgekey: refusing to send BMKT_CMD_DEL_FULL_DB (would erase Windows/BIOS prints)");
++
+   /* seq_num of 0 means a normal command, -1 means the current commands
+    * sequence number should not be updated (i.e. second async command which
+    * may only be a cancellation currently). */
+@@ -1177,7 +1181,7 @@
+     }
+ }
+ 
+-static void
++G_GNUC_UNUSED static void
+ clear_storage (FpDevice *device)
+ {
+   FpiDeviceSynaptics *self = FPI_DEVICE_SYNAPTICS (device);
+@@ -1537,7 +1541,9 @@
+   dev_class->identify = identify;
+   dev_class->enroll = enroll;
+   dev_class->delete = delete_print;
+-  dev_class->clear_storage = clear_storage;
++  /* ridgekey: clear_storage is deliberately NOT registered. BMKT_CMD_DEL_FULL_DB erases every
++   * print on the sensor, including Windows Hello and BIOS enrollments, so
++   * fp_device_clear_storage() must fail with FP_DEVICE_ERROR_NOT_SUPPORTED. */
+   dev_class->cancel = cancel;
+   dev_class->suspend = suspend;
+   dev_class->resume = resume;

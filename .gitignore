@@ -1,0 +1,10 @@
+.DS_Store
+dist/
+_build/
+build/
+*.log
+*.tar.gz
+*.tar.gz.sha256
+test-storage.variant
+# Linux reference captures contain finger/user IDs - keep them out of the repo
+synaptics-capture-*/

@@ -1,0 +1,23 @@
+From: RidgeKey (labrouss/RidgeKey)
+Subject: [PATCH 2/2] build: skip GNU version script on macOS
+
+Apple ld64 does not support -Wl,--version-script.
+
+License: LGPL-2.1-or-later (modifies libfprint).
+---
+--- a/libfprint/meson.build
++++ b/libfprint/meson.build
+@@ -327,7 +327,12 @@
+ else
+     mapfile_path = meson.project_source_root() / '@0@'.format(mapfile)
+ endif
+-vflag = '-Wl,--version-script,@0@'.format(mapfile_path)
++# ridgekey: Apple ld64 has no --version-script (exports are left at the default on macOS)
++if host_machine.system() == 'darwin'
++    vflag = []
++else
++    vflag = '-Wl,--version-script,@0@'.format(mapfile_path)
++endif
+ 
+ libfprint = shared_library(versioned_libname.split('lib')[1],
+     sources: [
