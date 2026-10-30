@@ -94,15 +94,15 @@ typedef struct {
   UniChar      ch;
   CGKeyCode    code;
   CGEventFlags flags;
-} KeyEntry;
+} RkKeyEntry;
 
 typedef struct {
-  KeyEntry e[1024];
+  RkKeyEntry e[1024];
   int      n;
-} KeyMap;
+} RkKeyMap;
 
 static int
-keymap_find (const KeyMap *m, UniChar ch)
+keymap_find (const RkKeyMap *m, UniChar ch)
 {
   int i;
 
@@ -114,7 +114,7 @@ keymap_find (const KeyMap *m, UniChar ch)
 
 /* Main thread only (Text Input Source calls assert that on recent macOS). */
 static int
-keymap_build (TISInputSourceRef src, KeyMap *m)
+keymap_build (TISInputSourceRef src, RkKeyMap *m)
 {
   /* fewest modifiers first, so 'a' maps to plain a, not Option-something */
   static const struct { UInt32 carbon; CGEventFlags cg; } mods[] = {
@@ -158,7 +158,7 @@ keymap_build (TISInputSourceRef src, KeyMap *m)
 }
 
 static int
-keymap_covers (const KeyMap *m, const UniChar *u, CFIndex len)
+keymap_covers (const RkKeyMap *m, const UniChar *u, CFIndex len)
 {
   CFIndex i;
 
@@ -171,7 +171,7 @@ keymap_covers (const KeyMap *m, const UniChar *u, CFIndex len)
 /* One character: the real key (with modifiers) when the layout has it, and the character
  * attached as well; Unicode-only as a last resort. */
 static void
-post_char (CGEventSourceRef src, const KeyMap *m, const UniChar *u, unsigned long n, int *unmapped)
+post_char (CGEventSourceRef src, const RkKeyMap *m, const UniChar *u, unsigned long n, int *unmapped)
 {
   int idx = n == 1 ? keymap_find (m, u[0]) : -1;
   int down;
@@ -200,7 +200,7 @@ type_password (const char *pw)
   CFIndex len, i;
   UniChar *units;
   CGEventSourceRef src;
-  KeyMap *map = calloc (1, sizeof *map);
+  RkKeyMap *map = calloc (1, sizeof *map);
   __block TISInputSourceRef restore = NULL;
   __block int switched = 0;
   int waited, was_asleep, unmapped = 0;
@@ -239,7 +239,7 @@ type_password (const char *pw)
     if (!keymap_covers (map, units, len))
       {
         TISInputSourceRef ascii = TISCopyCurrentASCIICapableKeyboardLayoutInputSource ();
-        KeyMap *alt = calloc (1, sizeof *alt);
+        RkKeyMap *alt = calloc (1, sizeof *alt);
 
         if (ascii && alt && keymap_build (ascii, alt) && keymap_covers (alt, units, len))
           {
