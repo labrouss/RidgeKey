@@ -50,6 +50,7 @@ static int typed_fail;        /* typed the password but the screen stayed locked
 static int test_mode;         /* --type-test: type a sample into the focused app, no Return */
 
 static void start_unlock (void);
+static int screen_locked_now (void);
 
 static void __attribute__ ((format (printf, 1, 2)))
 logf_ (const char *fmt, ...)
@@ -203,7 +204,7 @@ type_password (const char *pw)
   RkKeyMap *map = calloc (1, sizeof *map);
   __block TISInputSourceRef restore = NULL;
   __block int switched = 0;
-  int waited, was_asleep, unmapped = 0;
+  int waited, was_asleep, unmapped = 0, aborted = 0;
 
   if (!map)
     return;
@@ -273,13 +274,29 @@ type_password (const char *pw)
     usleep (100000);
   usleep (was_asleep ? 1500000 : 800000);
 
-  /* Clear anything already in the field (Backspace on an empty field does nothing). */
-  for (i = 0; i < 32; i++)
-    post_key (src, KEY_BACKSPACE, 0);
+  /* From here on, every step first checks that the screen is STILL locked: if the user
+   * unlocked meanwhile, the keystrokes (and the password, and Return) would go into whatever
+   * app has focus. Test mode types into a normal app on purpose and skips the check. */
+#define STILL_LOCKED() (test_mode || screen_locked_now ())
+  if (!STILL_LOCKED ())
+    {
+      aborted = 1;
+      goto done;
+    }
+
+  /* Clear anything already in the lock screen field (not in test mode). */
+  if (!test_mode)
+    for (i = 0; i < 32; i++)
+      post_key (src, KEY_BACKSPACE, 0);
   usleep (100000);
 
   for (i = 0; i < len; i++)
     {
+      if (!STILL_LOCKED ())
+        {
+          aborted = 1;
+          goto done;
+        }
       /* keep surrogate pairs (emoji etc.) in one event */
       if (units[i] >= 0xD800 && units[i] <= 0xDBFF && i + 1 < len)
         {
@@ -289,14 +306,18 @@ type_password (const char *pw)
       else
         post_char (src, map, &units[i], 1, &unmapped);
     }
+  usleep (100000);
+  if (!STILL_LOCKED ())
+    aborted = 1;
+  else if (!test_mode)
+    post_key (src, KEY_RETURN, 0);
+#undef STILL_LOCKED
+
+done:
   memset_s (units, ((size_t) len + 1) * sizeof *units, 0, ((size_t) len + 1) * sizeof *units);
   free (units);
   memset_s (map, sizeof *map, 0, sizeof *map);
   free (map);
-
-  usleep (100000);
-  if (!test_mode)
-    post_key (src, KEY_RETURN, 0);
   if (src)
     CFRelease (src);
 
@@ -311,8 +332,11 @@ type_password (const char *pw)
           }
       });
     }
-  logf_ ("typed the password into the lock screen (%ld characters, %d without a key on this layout)",
-         (long) len, unmapped);
+  if (aborted)
+    logf_ ("screen was unlocked while typing - stopped (no Return sent)");
+  else
+    logf_ ("typed the password into the lock screen (%ld characters, %d without a key on this layout)",
+           (long) len, unmapped);
 }
 
 /* ------------------------------------------------------------------------------------------ */

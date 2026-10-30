@@ -39,7 +39,7 @@
 
 #include <string.h>
 
-#define RK_VERSION        "0.4.2"
+#define RK_VERSION        "0.4.3"
 #define RK_SERVICE_NAME   "io.github.labrouss.ridgekey"
 
 /* The only program allowed to receive the stored password (op "unlock"). */
