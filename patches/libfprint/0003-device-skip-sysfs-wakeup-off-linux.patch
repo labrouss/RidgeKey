@@ -1,0 +1,52 @@
+From: RidgeKey (labrouss/RidgeKey)
+Subject: [PATCH 3/3] device: skip Linux sysfs USB wakeup setup on other systems
+
+fpi_device_configure_wakeup() builds /sys/bus/usb/devices/<bus>-<ports> by
+walking parent hubs. On macOS gusb reports no parent, the port string stays
+empty and g_string_set_size (ports, ports->len - 1) aborts with
+"adding 18446744073709551615 to string would overflow". Make it a no-op
+off Linux and guard the empty case on Linux too.
+
+License: LGPL-2.1-or-later (modifies libfprint).
+---
+--- a/libfprint/fpi-device.c
++++ b/libfprint/fpi-device.c
+@@ -1584,7 +1584,7 @@
+     fpi_device_return_task_in_idle (device, FP_DEVICE_TASK_RETURN_ERROR, error);
+ }
+ 
+-static int
++G_GNUC_UNUSED static int
+ update_attr (const char *attr, const char *value)
+ {
+   int fd, err;
+@@ -1736,6 +1736,12 @@
+   switch (priv->type)
+     {
+     case FP_DEVICE_TYPE_USB:
++#ifndef __linux__
++      /* ridgekey: USB wakeup/persist are Linux sysfs attributes; nothing to do on other systems.
++       * (On macOS gusb reports no parent hub, so the port path below was empty and
++       * g_string_set_size (ports, 0 - 1) aborted.) */
++      break;
++#else
+       {
+         g_autoptr(GString) ports = NULL;
+         g_autoptr(GUsbDevice) dev = NULL;
+@@ -1764,6 +1770,8 @@
+             g_string_prepend (ports, port_str);
+             g_set_object (&dev, parent);
+           }
++        if (ports->len == 0)
++          break;   /* ridgekey: no parent hub reported - no sysfs path to build */
+         g_string_set_size (ports, ports->len - 1);
+ 
+         sysfs_wakeup = g_strdup_printf ("/sys/bus/usb/devices/%d-%s/power/wakeup", bus, ports->str);
+@@ -1783,6 +1791,7 @@
+ 
+         break;
+       }
++#endif
+ 
+     case FP_DEVICE_TYPE_VIRTUAL:
+     case FP_DEVICE_TYPE_UDEV:

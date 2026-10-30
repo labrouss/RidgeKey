@@ -1,5 +1,5 @@
 From: RidgeKey (labrouss/RidgeKey)
-Subject: [PATCH 2/2] build: skip GNU version script on macOS
+Subject: [PATCH 2/3] build: skip GNU version script on macOS
 
 Apple ld64 does not support -Wl,--version-script.
 
