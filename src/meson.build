@@ -27,12 +27,13 @@ gio_dep      = dependency('gio-2.0', version: '>= 2.68')
 libfprint_dep = dependency('libfprint-2')
 
 pam_dep = cc.find_library('pam')
+bsm_dep = cc.find_library('bsm')     # audit_token_to_pid / _euid (peer.c)
 daemon_frameworks = dependency('appleframeworks', modules: ['CoreFoundation', 'IOKit', 'Security'])
 
 executable('ridgekeyd',
   ['daemon/ridgekeyd.c', 'daemon/store.c', 'daemon/secret.c', 'daemon/console.c', 'daemon/peer.c'],
   include_directories: common_inc,
-  dependencies: [glib_dep, gio_dep, libfprint_dep, pam_dep, daemon_frameworks],
+  dependencies: [glib_dep, gio_dep, libfprint_dep, pam_dep, bsm_dep, daemon_frameworks],
   install: true)
 
 # The client only needs libSystem (XPC + libdispatch).
