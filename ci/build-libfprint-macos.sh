@@ -1,8 +1,11 @@
 #!/bin/bash
-# ci/build-libfprint-macos.sh - RidgeKey, milestone 1 (libfprint on macOS)
+# ci/build-libfprint-macos.sh - build RidgeKey for macOS: libfprint stack + ridgekeyd + ridgekeyctl
 #
-# Builds libusb + GLib + gusb + libfprint (synaptics driver only, patched) on macOS x86_64
-# and packages a RELOCATABLE bundle: bin/{enroll,verify,identify,manage-prints} + lib/*.dylib.
+# Builds libusb + GLib + gusb + libfprint (synaptics driver only, patched) + RidgeKey (src/)
+# on macOS x86_64 and packages a RELOCATABLE bundle:
+#   bin/ridgekeyd bin/ridgekeyctl                  the daemon and its client
+#   bin/{enroll,verify,identify,manage-prints}     libfprint examples (diagnostics)
+#   lib/*.dylib  launchd/  install.sh  uninstall.sh
 # Same script runs in GitHub Actions (.github/workflows/libfprint-macos.yml) and on a Mac.
 #
 # Needs: Xcode CLT (clang, git, python3, perl), network. No Homebrew, no sudo.
@@ -39,7 +42,9 @@ GUSB_URL="https://github.com/hughsie/libgusb.git"
 LIBFPRINT_URL="https://gitlab.freedesktop.org/libfprint/libfprint.git"
 
 EXAMPLES="enroll verify identify manage-prints"   # never clear-storage
-BUNDLE_NAME="ridgekey-libfprint-${LIBFPRINT_TAG#v}-macos-$ARCH"
+RK_VER="$(sed -n 's/^#define RK_VERSION *"\(.*\)"/\1/p' "$REPO/src/common/ridgekey-protocol.h")"
+[ -n "$RK_VER" ] || { echo "cannot read RK_VERSION from src/common/ridgekey-protocol.h"; exit 1; }
+BUNDLE_NAME="ridgekey-$RK_VER-macos-$ARCH"
 LOG="$WORK/build.log"
 
 # ---------------------------------------------------------------------------------------------
@@ -207,6 +212,12 @@ build_meson libfprint "$WORK/libfprint" \
   drivers=synaptics introspection=false udev_rules=disabled udev_hwdb=disabled \
   gtk-examples=false doc=false installed-tests=false tod=false
 
+log "RidgeKey $RK_VER (ridgekeyd, ridgekeyctl)"
+rm -rf "$WORK/ridgekey-build"
+run meson setup "$WORK/ridgekey-build" "$REPO/src" --prefix="$PREFIX" --libdir=lib --buildtype=debugoptimized
+run meson compile -C "$WORK/ridgekey-build"
+run meson install -C "$WORK/ridgekey-build" --quiet
+
 log "Bundle $BUNDLE_NAME"
 BUNDLE="$WORK/bundle/$BUNDLE_NAME"
 rm -rf "$WORK/bundle"; mkdir -p "$BUNDLE/bin" "$BUNDLE/lib" "$BUNDLE/licenses" "$BUNDLE/patches"
@@ -216,6 +227,14 @@ mkdir -p "$BUNDLE/lib/pkgconfig"
 for pc in "$PREFIX"/lib/pkgconfig/*.pc; do
   sed "s|^prefix=.*|prefix=\${pcfiledir}/../..|" "$pc" > "$BUNDLE/lib/pkgconfig/$(basename "$pc")"
 done
+for b in ridgekeyd ridgekeyctl; do
+  [ -x "$PREFIX/bin/$b" ] || die "$b not built"
+  cp "$PREFIX/bin/$b" "$BUNDLE/bin/"
+done
+mkdir -p "$BUNDLE/launchd"
+cp "$REPO/launchd/"*.plist "$BUNDLE/launchd/"
+cp "$REPO/scripts/install.sh" "$REPO/scripts/uninstall.sh" "$BUNDLE/"
+chmod 755 "$BUNDLE/install.sh" "$BUNDLE/uninstall.sh"
 for ex in $EXAMPLES; do
   [ -x "$WORK/libfprint/_build/examples/$ex" ] || die "example $ex not built"
   cp "$WORK/libfprint/_build/examples/$ex" "$BUNDLE/bin/"
@@ -232,7 +251,7 @@ for d in "$WORK"/glib/subprojects/*/; do
 done
 
 {
-  echo "RidgeKey libfprint bundle - milestone 1 (libfprint examples on macOS)"
+  echo "RidgeKey $RK_VER for macOS - ridgekeyd, ridgekeyctl and libfprint $LIBFPRINT_TAG"
   echo "built:   $(date -u +%FT%TZ) on macOS $(sw_vers -productVersion) $ARCH, target $MACOSX_DEPLOYMENT_TARGET"
   echo "ci:      ${GITHUB_SERVER_URL:-local}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-} commit ${GITHUB_SHA:-local}"
   echo
@@ -247,15 +266,28 @@ done
 } > "$BUNDLE/BUILDINFO.txt"
 
 cat > "$BUNDLE/README.txt" <<'EOF'
-Run from this folder (any location - the bundle is relocatable, no sudo needed):
+RidgeKey - fingerprint daemon for macOS (Synaptics match-in-sensor readers)
 
+Install / upgrade (keeps existing prints):
   xattr -dr com.apple.quarantine .        # only if downloaded with a browser
-  G_MESSAGES_DEBUG=all bin/enroll 2>&1 | tee enroll.log    # choose a finger, ~8 touches
-  G_MESSAGES_DEBUG=all bin/verify 2>&1 | tee verify.log    # enrolled finger, then another one
+  sudo ./install.sh
 
-Prints are recorded in ./test-storage.variant (the examples' own storage file); the templates
-themselves stay inside the sensor (match-in-sensor).
-manage-prints can list/delete prints. The sensor-wipe command is disabled in this build.
+Use (as your normal user):
+  ridgekeyctl status
+  ridgekeyctl enroll right-index          # ~8 touches
+  ridgekeyctl verify                      # exit code 0 = match
+  ridgekeyctl list
+  ridgekeyctl delete right-index
+
+Uninstall:  sudo ./uninstall.sh            (keeps prints)
+            sudo ./uninstall.sh --purge    (deletes RidgeKey's prints from the sensor first)
+Log:        /Library/Logs/RidgeKey/ridgekeyd.log
+
+Diagnostics (stop the daemon first: sudo launchctl bootout system/io.github.labrouss.ridgekey):
+  bin/ridgekeyd --probe
+  G_MESSAGES_DEBUG=all bin/enroll | bin/verify | bin/identify    (libfprint examples)
+
+RidgeKey never erases the whole sensor; Windows Hello / BIOS prints are left alone.
 EOF
 
 if [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${SMOKE:-}" ]; then
@@ -267,11 +299,22 @@ mv "$PREFIX" "$PREFIX.hidden"
 set +e
 # Pick a finger, then enroll initialises libfprint -> gusb -> libusb and enumerates USB.
 # CI runners have no reader, so "No devices detected." is the expected success marker.
+SB="$SMOKE/$BUNDLE_NAME/bin"
+POUT=$("$SB/ridgekeyd" --probe 2>&1); PRC=$?
+COUT=$(perl -e 'alarm 20; exec @ARGV' "$SB/ridgekeyctl" status 2>&1); CRC=$?
+VOUT=$("$SB/ridgekeyd" --version 2>&1); VRC=$?
+echo "$VOUT"; echo "$POUT"; echo "$COUT"
+SMOKE_ERR=""
+[ "$VRC" = 0 ] || SMOKE_ERR="ridgekeyd --version failed (exit $VRC)"
+echo "$POUT" | grep -q 'no supported fingerprint sensor found\|driver=' || SMOKE_ERR="ridgekeyd --probe failed (exit $PRC)"
+[ "$CRC" = 3 ] || SMOKE_ERR="ridgekeyctl status without a daemon should exit 3, got $CRC"
 OUT=$( cd "$SMOKE/$BUNDLE_NAME" && printf '1\n' | perl -e 'alarm 30; exec @ARGV' ./bin/enroll 2>&1 )
 RC=$?
 set -e
 mv "$PREFIX.hidden" "$PREFIX"
 echo "$OUT" | tail -15
+[ -z "$SMOKE_ERR" ] || die "smoke test: $SMOKE_ERR"
+echo "    ridgekeyd --version/--probe and ridgekeyctl run from the moved bundle"
 echo "$OUT" | grep -q 'Library not loaded\|image not found\|dyld\[' && die "dyld could not load the bundle"
 if echo "$OUT" | grep -q 'No devices detected\|Enrolling\|Selected device'; then
   echo "    enroll initialised libfprint (exit $RC) - libraries resolve inside the bundle"

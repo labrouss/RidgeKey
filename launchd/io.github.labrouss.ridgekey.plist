@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- RidgeKey fingerprint daemon. Installed to /Library/LaunchDaemons by scripts/install.sh. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>io.github.labrouss.ridgekey</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/ridgekey/bin/ridgekeyd</string>
+  </array>
+
+  <!-- Clients connect to this Mach service; launchd starts the daemon on demand as well. -->
+  <key>MachServices</key>
+  <dict>
+    <key>io.github.labrouss.ridgekey</key>
+    <true/>
+  </dict>
+
+  <!-- Start at boot so the lock screen does not wait, and restart after a crash. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Library/Logs/RidgeKey/ridgekeyd.log</string>
+  <key>StandardOutPath</key>
+  <string>/Library/Logs/RidgeKey/ridgekeyd.log</string>
+</dict>
+</plist>

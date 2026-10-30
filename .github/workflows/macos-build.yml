@@ -1,0 +1,127 @@
+# RidgeKey - macOS build: libfprint stack (patched) + ridgekeyd + ridgekeyctl
+# Builds libusb + GLib + gusb + patched libfprint (synaptics only) and RidgeKey on an Intel macOS
+# runner and publishes a relocatable bundle with an installer.
+#
+# Push a tag  libfprint-macos-<anything>  to also attach the bundle to a GitHub Release.
+name: macos-build
+
+on:
+  push:
+    branches: [main]
+    tags: ['libfprint-macos-*', 'v*']
+    paths:
+      - 'ci/build-libfprint-macos.sh'
+      - 'patches/libfprint/**'
+      - 'src/**'
+      - 'launchd/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.github/workflows/macos-build.yml'
+  pull_request:
+    paths:
+      - 'ci/build-libfprint-macos.sh'
+      - 'patches/libfprint/**'
+      - 'src/**'
+      - 'launchd/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.github/workflows/macos-build.yml'
+  workflow_dispatch:
+    inputs:
+      libfprint_tag:
+        description: libfprint tag (gitlab.freedesktop.org/libfprint/libfprint)
+        default: v1.94.10
+      glib_tag:
+        description: GLib tag
+        default: '2.84.0'
+      gusb_tag:
+        description: libgusb tag
+        default: '0.3.10'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GLib
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libglib2.0-dev
+      - name: Print record (store.c)
+        run: bash tests/store/run.sh
+
+  build:
+    needs: unit-tests
+    # Free Intel runner; GitHub supports macOS x86_64 until the macOS 15 image retires (fall 2027).
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      LIBFPRINT_TAG: ${{ inputs.libfprint_tag || 'v1.94.10' }}
+      GLIB_TAG: ${{ inputs.glib_tag || '2.84.0' }}
+      GUSB_TAG: ${{ inputs.gusb_tag || '0.3.10' }}
+      FORCE_PKGCONF: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Hide Homebrew headers and libraries
+        # The runner has Homebrew in /usr/local, which clang searches by default. Your Mac has no
+        # Homebrew, so hide it to make the build match - and so nothing in the bundle links to it.
+        # (Brew binaries keep working: they use /usr/local/opt/..., not /usr/local/lib.)
+        run: |
+          for d in include lib; do
+            if [ -d "/usr/local/$d" ]; then sudo mv "/usr/local/$d" "/usr/local/$d.hidden-by-ci"; fi
+          done
+
+      - name: Build and package
+        env:
+          DIST: ${{ github.workspace }}/dist
+        run: bash ci/build-libfprint-macos.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ridgekey-macos-x86_64
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ~/src/fprint-build/build.log
+            ~/src/fprint-build/*/_build/meson-logs/meson-log.txt
+            ~/src/fprint-build/ridgekey-build/meson-logs/meson-log.txt
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ridgekey-macos-x86_64
+          path: dist
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --prerelease \
+            --title "RidgeKey for macOS - $GITHUB_REF_NAME" \
+            --notes "RidgeKey test build for macOS x86_64: ridgekeyd + ridgekeyctl + installer.
+          Sensor-wipe command (BMKT_CMD_DEL_FULL_DB) is disabled in this build.
+          See BUILDINFO.txt inside for exact sources; patches/ holds the LGPL-2.1 modifications."
