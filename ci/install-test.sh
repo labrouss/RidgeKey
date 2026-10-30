@@ -56,6 +56,43 @@ expect_rc 2 "unknown finger rejected by client" ridgekeyctl enroll left-toe
 expect_rc 0 "purge with nothing recorded" sudo ridgekeyctl purge --yes
 expect_out "deleted 0" "purge deletes nothing"
 
+echo "== console state"
+expect_rc 0 "status shows the console" ridgekeyctl status
+expect_out "^console:" "console line present"
+
+echo "== stored password (throwaway user)"
+TU=rktest
+TP="Rk-$(uuidgen | cut -c1-8)-x9"
+sudo sysadminctl -addUser "$TU" -password "$TP" >/dev/null 2>&1 || true
+if id "$TU" >/dev/null 2>&1; then
+  expect_rc 1 "wrong password rejected" sh -c "echo not-the-password | sudo ridgekeyctl -u $TU password set --stdin"
+  expect_out "bad-password" "rejected as bad-password"
+  expect_rc 1 "nothing stored after a rejection" sudo ridgekeyctl -u "$TU" password check
+  expect_out "no password stored" "check reports nothing stored"
+  expect_rc 1 "non-root cannot set another user's password" sh -c "echo x | ridgekeyctl -u $TU password set --stdin"
+  expect_out "permission" "permission enforced"
+  expect_rc 0 "correct password stored (checked + read back)" sh -c "printf '%s\n' '$TP' | sudo ridgekeyctl -u $TU password set --stdin"
+  expect_rc 0 "check: valid" sudo ridgekeyctl -u "$TU" password check
+  expect_out "stored password is valid" "keychain read + PAM check ok"
+  expect_rc 0 "list shows it" sudo ridgekeyctl -u "$TU" list
+  expect_out "lock-screen password: stored" "list reports stored"
+  # upgrade = a differently signed ridgekeyd must still read the item without a prompt
+  sudo codesign --force --sign - --identifier io.github.labrouss.ridgekey.resigned /usr/local/ridgekey/bin/ridgekeyd >/dev/null 2>&1
+  sudo launchctl kickstart -k system/io.github.labrouss.ridgekey
+  sleep 2
+  expect_rc 0 "re-signed daemon still reads it" sudo ridgekeyctl -u "$TU" password check
+  expect_out "stored password is valid" "keychain ACL survives re-signing"
+  sudo dscl . -passwd "/Users/$TU" "$TP" "${TP}-new" >/dev/null 2>&1 || true
+  expect_rc 1 "outdated after a password change" sudo ridgekeyctl -u "$TU" password check
+  expect_out "OUTDATED" "stale password detected"
+  expect_rc 0 "clear" sudo ridgekeyctl -u "$TU" password clear
+  expect_rc 1 "gone after clear" sudo ridgekeyctl -u "$TU" password check
+  expect_out "no password stored" "cleared"
+  sudo sysadminctl -deleteUser "$TU" >/dev/null 2>&1 || true
+else
+  echo "  skip could not create a throwaway user on this runner"
+fi
+
 echo "== PAM module inside OpenPAM"
 MOD=/usr/local/ridgekey/lib/pam/pam_ridgekey.so
 pam_service ridgekey-ci "auth       sufficient     $MOD timeout=5 tries=1 allow_remote debug" "auth       required       pam_deny.so"

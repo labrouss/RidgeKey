@@ -3,12 +3,14 @@
  *
  * Exit codes: 0 success / match, 1 failed / no match, 2 usage, 3 cannot reach ridgekeyd.
  */
+#define __STDC_WANT_LIB_EXT1__ 1   /* memset_s */
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#include <readpassphrase.h>
 #include <xpc/xpc.h>
 #include <dispatch/dispatch.h>
 
@@ -34,6 +36,11 @@ usage (FILE *f)
     "  identify [-t SECONDS]   match against every user's prints (root only)\n"
     "  delete FINGER           delete one RidgeKey print from the sensor and the record\n"
     "  purge [--yes]           delete every RidgeKey print, one by one (root only)\n"
+    "  password set            store your login password for lock-screen unlock\n"
+    "                          (checked against your account, kept in the System keychain)\n"
+    "  password clear          remove the stored password\n"
+    "  password check          is a password stored, and is it still your login password?\n"
+    "                          (password set --stdin reads it from standard input, for scripts)\n"
     "\n"
     "  -u USER   act on another user (root only)\n"
     "  -v        show finger on/off events\n"
@@ -94,8 +101,13 @@ print_result (const char *op, xpc_object_t reply)
     {
       const char *dev = xpc_dictionary_get_string (reply, RK_KEY_DEVICE);
 
+      const char *cu = xpc_dictionary_get_string (reply, RK_KEY_CONSOLE_USER);
+
       printf ("ridgekeyd %s%s\n", xpc_dictionary_get_string (reply, RK_KEY_VERSION),
               xpc_dictionary_get_bool (reply, RK_KEY_BUSY) ? " (busy)" : "");
+      if (cu)
+        printf ("console:  %s%s\n", *cu ? cu : "login window",
+                xpc_dictionary_get_bool (reply, RK_KEY_SCREEN_LOCKED) ? " (screen locked)" : "");
       if (dev && *dev)
         printf ("sensor:   %s (driver %s, id %s, %lld enroll scans)\n", dev,
                 xpc_dictionary_get_string (reply, RK_KEY_DRIVER),
@@ -113,6 +125,8 @@ print_result (const char *op, xpc_object_t reply)
               n == 1 ? "" : "s");
       for (i = 0; i < n; i++)
         printf ("  %s\n", xpc_array_get_string (arr, i));
+      printf ("lock-screen password: %s\n",
+              xpc_dictionary_get_bool (reply, RK_KEY_PASSWORD_STORED) ? "stored" : "not stored");
     }
   else if (strcmp (op, RK_OP_ENROLL) == 0)
     {
@@ -137,6 +151,25 @@ print_result (const char *op, xpc_object_t reply)
     {
       printf ("deleted %lld RidgeKey print(s)\n", (long long) xpc_dictionary_get_int64 (reply, RK_KEY_DELETED));
     }
+  else if (strcmp (op, RK_OP_PASSWORD_SET) == 0)
+    {
+      printf ("Password checked and stored for %s.\n", xpc_dictionary_get_string (reply, RK_KEY_USER));
+    }
+  else if (strcmp (op, RK_OP_PASSWORD_CLEAR) == 0)
+    {
+      printf ("Stored password removed for %s.\n", xpc_dictionary_get_string (reply, RK_KEY_USER));
+    }
+  else if (strcmp (op, RK_OP_PASSWORD_CHECK) == 0)
+    {
+      int stored = xpc_dictionary_get_bool (reply, RK_KEY_PASSWORD_STORED);
+      int valid = xpc_dictionary_get_bool (reply, RK_KEY_PASSWORD_VALID);
+
+      printf ("%s: %s\n", xpc_dictionary_get_string (reply, RK_KEY_USER),
+              !stored ? "no password stored" :
+              valid ? "stored password is valid" :
+              "stored password is OUTDATED - run: ridgekeyctl password set");
+      exit_code = (stored && valid) ? 0 : 1;
+    }
 }
 
 static void
@@ -154,7 +187,8 @@ main (int argc, char **argv)
 {
   const char *user = NULL, *op, *finger = NULL;
   long timeout = 0;
-  int yes = 0, opt;
+  int yes = 0, from_stdin = 0, opt;
+  char password[1024] = "";
   xpc_object_t msg;
   dispatch_queue_t q;
   dispatch_source_t sigint;
@@ -183,6 +217,8 @@ main (int argc, char **argv)
         timeout = strtol (argv[++optind], NULL, 10);
       else if (strcmp (a, "--yes") == 0)
         yes = 1;
+      else if (strcmp (a, "--stdin") == 0)
+        from_stdin = 1;
       else if (!finger)
         finger = a;
       else
@@ -192,9 +228,51 @@ main (int argc, char **argv)
         }
     }
 
+  if (strcmp (op, "password") == 0)
+    {
+      if (finger && strcmp (finger, "set") == 0)
+        op = RK_OP_PASSWORD_SET;
+      else if (finger && strcmp (finger, "clear") == 0)
+        op = RK_OP_PASSWORD_CLEAR;
+      else if (finger && strcmp (finger, "check") == 0)
+        op = RK_OP_PASSWORD_CHECK;
+      else
+        {
+          fprintf (stderr, "usage: ridgekeyctl password set|clear|check\n");
+          return 2;
+        }
+      finger = NULL;
+    }
+  if (strcmp (op, RK_OP_PASSWORD_SET) == 0)
+    {
+      if (from_stdin)
+        {
+          size_t n;
+
+          if (!fgets (password, sizeof password, stdin))
+            password[0] = '\0';
+          n = strlen (password);
+          if (n && password[n - 1] == '\n')
+            password[n - 1] = '\0';
+        }
+      else
+        {
+          printf ("RidgeKey types this password into the lock screen after a fingerprint match.\n"
+                  "It is checked against your account and stored in the System keychain (root only).\n");
+          if (!readpassphrase ("Login password: ", password, sizeof password, RPP_ECHO_OFF | RPP_REQUIRE_TTY))
+            password[0] = '\0';
+        }
+      if (!*password)
+        {
+          fprintf (stderr, "no password entered\n");
+          return 2;
+        }
+    }
+
   if (strcmp (op, RK_OP_STATUS) && strcmp (op, RK_OP_LIST) && strcmp (op, RK_OP_ENROLL) &&
       strcmp (op, RK_OP_VERIFY) && strcmp (op, RK_OP_IDENTIFY) && strcmp (op, RK_OP_DELETE) &&
-      strcmp (op, RK_OP_PURGE))
+      strcmp (op, RK_OP_PURGE) && strcmp (op, RK_OP_PASSWORD_SET) && strcmp (op, RK_OP_PASSWORD_CLEAR) &&
+      strcmp (op, RK_OP_PASSWORD_CHECK))
     {
       fprintf (stderr, "unknown command: %s\n\n", op);
       usage (stderr);
@@ -243,6 +321,11 @@ main (int argc, char **argv)
     xpc_dictionary_set_string (msg, RK_KEY_FINGER, finger);
   if (timeout > 0)
     xpc_dictionary_set_int64 (msg, RK_KEY_TIMEOUT, timeout);
+  if (*password)
+    {
+      xpc_dictionary_set_string (msg, RK_KEY_PASSWORD, password);
+      memset_s (password, sizeof password, 0, sizeof password);
+    }
 
   if (strcmp (op, RK_OP_ENROLL) == 0)
     printf ("Enrolling %s - touch the sensor, lift, and repeat until done.\n", finger);

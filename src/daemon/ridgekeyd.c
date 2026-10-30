@@ -28,6 +28,8 @@
 #include <dispatch/dispatch.h>
 
 #include "ridgekey-protocol.h"
+#include "console.h"
+#include "secret.h"
 #include "store.h"
 
 #define RK_MAX_RETRIES          3
@@ -672,6 +674,13 @@ do_status (Request *r)
       xpc_dictionary_set_string (reply, RK_KEY_DEVICE_ID, fp_device_get_device_id (dev));
       xpc_dictionary_set_int64 (reply, RK_KEY_STAGES, fp_device_get_nr_enroll_stages (dev));
     }
+  {
+    ConsoleState cs = console_get_state ();
+    struct passwd *pw = cs.uid != RK_NO_CONSOLE_USER ? getpwuid (cs.uid) : NULL;
+
+    xpc_dictionary_set_string (reply, RK_KEY_CONSOLE_USER, pw ? pw->pw_name : "");
+    xpc_dictionary_set_bool (reply, RK_KEY_SCREEN_LOCKED, cs.locked);
+  }
   reply_send (r, reply);
 }
 
@@ -694,7 +703,113 @@ do_list (Request *r)
   xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
   xpc_dictionary_set_string (reply, RK_KEY_USER, name);
   xpc_dictionary_set_value (reply, RK_KEY_FINGERS, arr);
+  xpc_dictionary_set_bool (reply, RK_KEY_PASSWORD_STORED, secret_exists (name));
   xpc_release (arr);
+  reply_send (r, reply);
+}
+
+static void
+do_password_set (Request *r)
+{
+  uid_t uid;
+  g_autofree char *name = NULL;
+  g_autoptr(GError) err = NULL;
+  const char *password = xpc_dictionary_get_string (r->msg, RK_KEY_PASSWORD);
+  xpc_object_t reply;
+
+  if (!resolve_user (r, &uid, &name))
+    return;
+  if (!password || !*password)
+    {
+      reply_error (r, RK_ERR_BAD_REQUEST, "missing password");
+      return;
+    }
+  if (!secret_validate (name, password, &err))
+    {
+      reply_error (r, g_error_matches (err, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED)
+                      ? RK_ERR_BAD_PASSWORD : RK_ERR_FAILED, "%s", err->message);
+      return;
+    }
+  if (!secret_store (name, password, &err))
+    {
+      reply_error (r, RK_ERR_STORAGE, "%s", err->message);
+      return;
+    }
+  /* Read it back: proves the keychain ACL lets ridgekeyd read the item without a prompt. */
+  {
+    char *back = secret_load (name, &err);
+    gboolean same = back && strcmp (back, password) == 0;
+
+    secret_free (back);
+    if (!same)
+      {
+        secret_clear (name, NULL);
+        reply_error (r, RK_ERR_STORAGE, "stored password could not be read back: %s",
+                     err ? err->message : "content differs");
+        return;
+      }
+  }
+  g_message ("uid %u: stored the login password of %s", (unsigned) r->caller, name);
+  reply = reply_new (r);
+  xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
+  xpc_dictionary_set_string (reply, RK_KEY_USER, name);
+  reply_send (r, reply);
+}
+
+static void
+do_password_check (Request *r)
+{
+  uid_t uid;
+  g_autofree char *name = NULL;
+  g_autoptr(GError) err = NULL;
+  char *pw;
+  gboolean valid = FALSE;
+  xpc_object_t reply;
+
+  if (!resolve_user (r, &uid, &name))
+    return;
+  pw = secret_load (name, &err);
+  if (!pw && !g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
+    {
+      reply_error (r, RK_ERR_STORAGE, "%s", err->message);
+      return;
+    }
+  if (pw)
+    {
+      g_autoptr(GError) verr = NULL;
+
+      valid = secret_validate (name, pw, &verr);
+      if (!valid)
+        g_message ("stored password of %s no longer valid: %s", name, verr->message);
+      secret_free (pw);
+    }
+  reply = reply_new (r);
+  xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
+  xpc_dictionary_set_string (reply, RK_KEY_USER, name);
+  xpc_dictionary_set_bool (reply, RK_KEY_PASSWORD_STORED, pw != NULL || valid);
+  xpc_dictionary_set_bool (reply, RK_KEY_PASSWORD_VALID, valid);
+  reply_send (r, reply);
+}
+
+static void
+do_password_clear (Request *r)
+{
+  uid_t uid;
+  g_autofree char *name = NULL;
+  g_autoptr(GError) err = NULL;
+  xpc_object_t reply;
+
+  if (!resolve_user (r, &uid, &name))
+    return;
+  if (!secret_clear (name, &err))
+    {
+      reply_error (r, RK_ERR_STORAGE, "%s", err->message);
+      return;
+    }
+  g_message ("uid %u: removed the stored password of %s", (unsigned) r->caller, name);
+  reply = reply_new (r);
+  xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
+  xpc_dictionary_set_string (reply, RK_KEY_USER, name);
   reply_send (r, reply);
 }
 
@@ -731,6 +846,12 @@ handle_request (gpointer data)
     do_list (r);
   else if (strcmp (op, RK_OP_CANCEL) == 0)
     do_cancel (r);
+  else if (strcmp (op, RK_OP_PASSWORD_SET) == 0)
+    do_password_set (r);
+  else if (strcmp (op, RK_OP_PASSWORD_CLEAR) == 0)
+    do_password_clear (r);
+  else if (strcmp (op, RK_OP_PASSWORD_CHECK) == 0)
+    do_password_check (r);
   else if (strcmp (op, RK_OP_ENROLL) == 0)
     return (start_op (r, OP_ENROLL), G_SOURCE_REMOVE);
   else if (strcmp (op, RK_OP_VERIFY) == 0)
@@ -797,6 +918,18 @@ setup_peer (xpc_connection_t peer, dispatch_queue_t queue)
 }
 
 /* ------------------------------------------------------------------------------------------ */
+
+static void
+on_console_changed (const ConsoleState *cs, gpointer data)
+{
+  struct passwd *pw = cs->uid != RK_NO_CONSOLE_USER ? getpwuid (cs->uid) : NULL;
+
+  if (cs->uid == RK_NO_CONSOLE_USER)
+    g_message ("console: login window");
+  else
+    g_message ("console: %s (uid %u), screen %s", pw ? pw->pw_name : "?", (unsigned) cs->uid,
+               cs->locked ? "LOCKED" : "unlocked");
+}
 
 static gboolean
 on_signal (gpointer data)
@@ -923,6 +1056,7 @@ main (int argc, char **argv)
     /* CONNECTION_INVALID is the expected result of cancelling the listener at shutdown */
   });
   xpc_connection_resume (listener);
+  console_watch (on_console_changed, NULL);
 
   g_message ("ridgekeyd %s listening on %s (%s)", RK_VERSION, RK_SERVICE_NAME,
              pick_device () ? fp_device_get_name (pick_device ()) : "no sensor yet");

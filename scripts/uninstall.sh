@@ -4,7 +4,8 @@
 #   (default)  stop and remove the daemon and binaries; keep the print record and the prints
 #              on the sensor (a reinstall picks them up again)
 #   --purge    first delete every RidgeKey print from the sensor, one by one, then remove the
-#              record too. Windows Hello / BIOS prints are never touched.
+#              record and the stored lock-screen passwords (System keychain) too.
+#              Windows Hello / BIOS prints are never touched.
 set -euo pipefail
 
 LABEL="io.github.labrouss.ridgekey"
@@ -46,8 +47,13 @@ rm -rf "$DEST"
 for l in ridgekeyctl ridgekey-sudo; do [ -L "/usr/local/bin/$l" ] && rm -f "/usr/local/bin/$l"; done
 
 if [ $PURGE = 1 ]; then
+  n=0
+  while security delete-generic-password -s io.github.labrouss.ridgekey.password \
+          /Library/Keychains/System.keychain >/dev/null 2>&1; do n=$((n + 1)); done
+  echo "Removed $n stored password(s) from the System keychain."
   rm -rf "$DATA" /Library/Logs/RidgeKey
   echo "Removed RidgeKey and its prints."
 else
-  echo "Removed RidgeKey. Kept the print record in '$DATA' (use --purge to remove prints too)."
+  echo "Removed RidgeKey. Kept the print record in '$DATA' and any stored password"
+  echo "(use --purge to remove prints and passwords too)."
 fi

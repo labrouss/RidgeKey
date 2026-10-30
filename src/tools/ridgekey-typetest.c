@@ -4,10 +4,12 @@
  * Waits DELAY seconds (lock the screen meanwhile), then types a harmless test word into
  * whatever has keyboard focus. It NEVER presses Return and never types a real password.
  *
- *   ridgekey-typetest [-d SECONDS] [-t WORD] [-k]
+ *   ridgekey-typetest [-d SECONDS] [-t WORD] [-k] [-n]
  *     -d  delay before typing (default 10)
  *     -t  word to type, letters a-z only (default "ridgekey")
  *     -k  use US virtual key codes instead of Unicode strings (second method to compare)
+ *     -n  skip the Accessibility check (when run as a root launchd daemon, which has no
+ *         GUI session - see scripts/typetest-as-daemon.sh)
  *
  * Needs Accessibility permission for the app it runs in (Terminal / iTerm): System Settings ->
  * Privacy & Security -> Accessibility. It asks for it on first run.
@@ -65,21 +67,22 @@ main (int argc, char **argv)
 {
   long delay = 10;
   const char *word = "ridgekey";
-  int use_keycodes = 0, opt, locked;
+  int use_keycodes = 0, skip_ax = 0, opt, locked;
   size_t i;
   CGEventSourceRef src;
   const void *keys[] = { kAXTrustedCheckOptionPrompt };
   const void *vals[] = { kCFBooleanTrue };
   CFDictionaryRef ax_opts;
 
-  while ((opt = getopt (argc, argv, "d:t:kh")) != -1)
+  while ((opt = getopt (argc, argv, "d:t:knh")) != -1)
     switch (opt)
       {
       case 'd': delay = strtol (optarg, NULL, 10); break;
       case 't': word = optarg; break;
       case 'k': use_keycodes = 1; break;
+      case 'n': skip_ax = 1; break;
       default:
-        fprintf (stderr, "usage: %s [-d SECONDS] [-t WORD] [-k]\n", argv[0]);
+        fprintf (stderr, "usage: %s [-d SECONDS] [-t WORD] [-k] [-n]\n", argv[0]);
         return 2;
       }
   for (i = 0; word[i]; i++)
@@ -89,9 +92,10 @@ main (int argc, char **argv)
         return 2;
       }
 
+  printf ("ridgekey-typetest: euid %u\n", (unsigned) geteuid ());
   ax_opts = CFDictionaryCreate (NULL, keys, vals, 1, &kCFTypeDictionaryKeyCallBacks,
                                 &kCFTypeDictionaryValueCallBacks);
-  if (!AXIsProcessTrustedWithOptions (ax_opts))
+  if (!skip_ax && !AXIsProcessTrustedWithOptions (ax_opts))
     {
       printf ("Accessibility permission is missing for this terminal app.\n"
               "Grant it in System Settings -> Privacy & Security -> Accessibility, then run again.\n");

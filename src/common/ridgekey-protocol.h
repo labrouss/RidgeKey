@@ -9,6 +9,8 @@
  *                      act on another user.
  *   "finger"   string  finger name (rk_finger_names), for enroll / delete
  *   "timeout"  int64   optional seconds for verify / identify (default 30, max 120)
+ *   "password" string  for password-set: the user's current login password (checked, then
+ *                      stored in the System keychain; never logged, never returned)
  *
  * Event    (daemon -> client, plain messages while an operation runs):
  *   "event"    string  RK_EV_*
@@ -22,18 +24,21 @@
  *   "message"  string  human readable detail
  *   op specific:
  *     status:   "device" string (name, "" if none), "driver", "device-id", "stages" int64,
- *               "busy" bool, "version" string (RidgeKey version)
- *     list:     "fingers" array of finger-name strings, "user" string
+ *               "busy" bool, "version" string (RidgeKey version),
+ *               "console-user" string ("" at the login window), "screen-locked" bool
+ *     list:     "fingers" array of finger-name strings, "user" string,
+ *               "password-stored" bool
  *     enroll:   "finger" string
  *     verify / identify: "matched" bool, and when matched: "user" string, "finger" string
  *     purge:    "deleted" int64
+ *     password-check: "password-stored" bool, "password-valid" bool
  */
 #ifndef RIDGEKEY_PROTOCOL_H
 #define RIDGEKEY_PROTOCOL_H
 
 #include <string.h>
 
-#define RK_VERSION        "0.2.1"
+#define RK_VERSION        "0.3.0"
 #define RK_SERVICE_NAME   "io.github.labrouss.ridgekey"
 
 /* verify / identify wait at most this long for a finger */
@@ -60,6 +65,11 @@
 #define RK_KEY_BUSY      "busy"
 #define RK_KEY_VERSION   "version"
 #define RK_KEY_DELETED   "deleted"
+#define RK_KEY_PASSWORD  "password"
+#define RK_KEY_PASSWORD_STORED "password-stored"
+#define RK_KEY_PASSWORD_VALID  "password-valid"
+#define RK_KEY_CONSOLE_USER    "console-user"
+#define RK_KEY_SCREEN_LOCKED   "screen-locked"
 
 /* operations */
 #define RK_OP_STATUS    "status"    /* anyone */
@@ -70,6 +80,9 @@
 #define RK_OP_DELETE    "delete"    /* own user, root: any - only prints RidgeKey enrolled */
 #define RK_OP_PURGE     "purge"     /* root only - delete every RidgeKey print, one by one */
 #define RK_OP_CANCEL    "cancel"    /* the client that started the operation, or root */
+#define RK_OP_PASSWORD_SET   "password-set"    /* own user, root: any - validated first */
+#define RK_OP_PASSWORD_CLEAR "password-clear"  /* own user, root: any */
+#define RK_OP_PASSWORD_CHECK "password-check"  /* own user, root: any - reads it back and re-checks it */
 
 /* events */
 #define RK_EV_FINGER          "finger"
@@ -88,6 +101,7 @@
 #define RK_ERR_DATA_FULL   "data-full"
 #define RK_ERR_STORAGE     "storage"
 #define RK_ERR_FAILED      "failed"
+#define RK_ERR_BAD_PASSWORD "bad-password"
 
 /* Finger names, indexed by libfprint's FpFinger (1..10). Index 0 = unknown. */
 static const char *const rk_finger_names[] = {

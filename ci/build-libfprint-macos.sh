@@ -234,8 +234,9 @@ for b in ridgekeyd ridgekeyctl ridgekey-pamcheck ridgekey-typetest; do
 done
 mkdir -p "$BUNDLE/launchd"
 cp "$REPO/launchd/"*.plist "$BUNDLE/launchd/"
-cp "$REPO/scripts/install.sh" "$REPO/scripts/uninstall.sh" "$REPO/scripts/ridgekey-sudo" "$BUNDLE/"
-chmod 755 "$BUNDLE/install.sh" "$BUNDLE/uninstall.sh" "$BUNDLE/ridgekey-sudo"
+cp "$REPO/scripts/install.sh" "$REPO/scripts/uninstall.sh" "$REPO/scripts/ridgekey-sudo" \
+   "$REPO/scripts/typetest-as-daemon.sh" "$BUNDLE/"
+chmod 755 "$BUNDLE/install.sh" "$BUNDLE/uninstall.sh" "$BUNDLE/ridgekey-sudo" "$BUNDLE/typetest-as-daemon.sh"
 for ex in $EXAMPLES; do
   [ -x "$WORK/libfprint/_build/examples/$ex" ] || die "example $ex not built"
   cp "$WORK/libfprint/_build/examples/$ex" "$BUNDLE/bin/"

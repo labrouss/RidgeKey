@@ -21,8 +21,8 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 | 2 | libfprint as a macOS library, with the example enroll/verify working against the 00f0 | ✅ |
 | 3 | `ridgekeyd` launchd daemon + `ridgekeyctl` client over XPC ([docs](docs/ridgekeyd.md)) | ✅ 0.1.0 tested on the 840 G8 (enroll, verify, identify, cancel, reboot) |
 | 4a | `sudo` with fingerprint: `pam_ridgekey.so` + `ridgekey-sudo` ([docs](docs/ridgekeyd.md#fingerprint-for-sudo)) | ✅ 0.2.0 tested: match, wrong finger, Ctrl-C |
-| 4b | Lock screen: after a match, type the stored password into Apple's own lock screen (keeps the native UI and unlocks the keychain) | 🔬 feasibility test (`ridgekey-typetest`) |
-| 4c | Stored password: encrypted, root-only; released only to type into the lock screen right after a match | planned (after 4b test) |
+| 4b | Lock screen: after a match, type the stored password into Apple's own lock screen (keeps the native UI and unlocks the keychain) | 🔬 typing confirmed from a user session (Unicode, layout-independent); testing from the root daemon |
+| 4c | Stored password: checked, then kept in the System keychain (root only); lock-state tracking | 🔧 0.3.0 |
 | 4d | SwiftUI settings app and enrollment; Authorization plugin for admin password dialogs | planned |
 
 Why not an Authorization plugin for the lock screen? Since macOS 14 the lock screen uses its own

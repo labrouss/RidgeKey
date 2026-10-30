@@ -38,6 +38,29 @@ sudo ridgekeyctl -u alice list     act on another user
 ```
 Add `-v` to see finger on/off events. Ctrl-C cancels. Exit code 3 = daemon not reachable.
 
+## Lock-screen password (preparation for lock-screen unlock)
+
+```sh
+ridgekeyctl password set       # asks for your login password (no echo)
+ridgekeyctl password check     # stored? still your current password?
+ridgekeyctl password clear
+```
+
+- **Checked before storing:** the password must be your current login password (PAM `checkpw`)
+  or it isn't saved. It is then read back to prove the daemon can use it without a prompt.
+- **Where it lives:** one item per user in `/Library/Keychains/System.keychain` (service
+  `io.github.labrouss.ridgekey.password`), encrypted at rest and readable only by root. The
+  item's access list allows root processes without a prompt, so an upgraded (re-signed)
+  `ridgekeyd` can still read it.
+- **Never sent back:** the password is never written to the log and never returned over XPC.
+- **After you change your login password,** `password check` reports it as OUTDATED and the
+  daemon won't type it. Run `password set` again.
+- `uninstall.sh --purge` removes all stored passwords; a plain uninstall keeps them.
+
+The daemon also follows the console: `ridgekeyctl status` and the log show who is logged in at
+the screen and whether it is locked (read from the IORegistry `IOConsoleUsers`, which user
+processes cannot fake).
+
 ## Fingerprint for sudo
 
 ```sh
@@ -104,11 +127,11 @@ the `finger`, `enroll-progress` and `retry` events, reply fields, and error code
 `no-device`, `permission`, `not-found`, `no-prints`, `timeout`, `cancelled`, `data-full`, `storage`,
 `failed`, `bad-request`).
 
-## Known limitations (0.2.0)
+## Known limitations (0.3.0)
 
 - **Callers are identified by their effective uid** (`xpc_connection_get_euid`). A later version
   should check code signatures, for example to allow only the RidgeKey app to enroll.
 - **Enroll needs no password:** any process running as you can start an enrollment, but it still
   needs a finger on the sensor. The GUI will ask for your password first.
-- **Only sudo for now.** The lock screen, screen saver and Authorization plugin
-  (system dialogs) come next and build on `verify` / `identify`.
+- **The lock screen isn't unlocked yet.** 0.3.0 stores the password and tracks the lock state;
+  typing it after a match comes next.

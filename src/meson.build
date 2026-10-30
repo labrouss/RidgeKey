@@ -1,7 +1,7 @@
 # RidgeKey - daemon and command-line client
 # SPDX-License-Identifier: MIT
 project('ridgekey', 'c',
-  version: '0.2.1',
+  version: '0.3.0',
   license: 'MIT',
   meson_version: '>= 0.59.0',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=debugoptimized'])
@@ -26,10 +26,13 @@ glib_dep     = dependency('glib-2.0', version: '>= 2.68')
 gio_dep      = dependency('gio-2.0', version: '>= 2.68')
 libfprint_dep = dependency('libfprint-2')
 
+pam_dep = cc.find_library('pam')
+daemon_frameworks = dependency('appleframeworks', modules: ['CoreFoundation', 'IOKit', 'Security'])
+
 executable('ridgekeyd',
-  ['daemon/ridgekeyd.c', 'daemon/store.c'],
+  ['daemon/ridgekeyd.c', 'daemon/store.c', 'daemon/secret.c', 'daemon/console.c'],
   include_directories: common_inc,
-  dependencies: [glib_dep, gio_dep, libfprint_dep],
+  dependencies: [glib_dep, gio_dep, libfprint_dep, pam_dep, daemon_frameworks],
   install: true)
 
 # The client only needs libSystem (XPC + libdispatch).
@@ -39,7 +42,6 @@ executable('ridgekeyctl',
   install: true)
 
 # PAM module for sudo (and later other services). Loaded by sudo from an absolute path.
-pam_dep = cc.find_library('pam')
 shared_module('pam_ridgekey',
   ['pam/pam_ridgekey.c'],
   include_directories: common_inc,
