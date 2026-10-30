@@ -110,7 +110,7 @@ main (int argc, char **argv)
   sleep ((unsigned) delay);
 
   locked = screen_is_locked ();
-  src = CGEventSourceCreate (kCGEventSourceStateHIDSystemState);
+  src = CGEventSourceCreate (kCGEventSourceStatePrivate);
   for (i = 0; word[i]; i++)
     post_key (src, us_keycodes[word[i] - 'a'], (UniChar) word[i], use_keycodes);
   if (src)

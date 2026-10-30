@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include <ApplicationServices/ApplicationServices.h>
+#include <Carbon/Carbon.h>          /* Text Input Sources + UCKeyTranslate: real key codes */
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
 #include <xpc/xpc.h>
@@ -26,11 +27,16 @@
 #include "ridgekey-protocol.h"
 
 #define MAX_NO_MATCH   5      /* wrong fingers per lock before giving up (password still works) */
+#define MAX_TYPED_FAIL 2      /* typed but still locked: stop, to avoid repeated wrong-password attempts */
 #define WAIT_SECONDS   60     /* one unlock request; renewed while the screen stays locked */
 
-#define KEY_RETURN 36
-#define KEY_SHIFT  56
-#define KEY_A      0
+#define KEY_RETURN    36
+#define KEY_SHIFT     56
+#define KEY_BACKSPACE 51
+
+/* NEVER send Command: macOS 0.4.0 kept Command "held" after a Cmd-A, so the password went in
+ * as Cmd shortcuts (Cmd-Shift-3/4 = screenshots). Every event now carries explicit flags and
+ * comes from a private event source that cannot change or inherit the system modifier state. */
 
 /* All state below is only touched on `q`. */
 static dispatch_queue_t q;
@@ -40,6 +46,8 @@ static int in_flight;
 static int gave_up;           /* stop for this lock (no prints, no password, too many misses) */
 static int no_match;
 static unsigned lock_gen;     /* increments on every lock / unlock */
+static int typed_fail;        /* typed the password but the screen stayed locked */
+static int test_mode;         /* --type-test: type a sample into the focused app, no Return */
 
 static void start_unlock (void);
 
@@ -80,25 +88,111 @@ post_key (CGEventSourceRef src, CGKeyCode code, CGEventFlags flags)
     }
 }
 
-static void
-post_units (CGEventSourceRef src, const UniChar *u, unsigned long n)
+/* ---- key map: character -> (virtual key code, Shift/Option) for a keyboard layout ---- */
+
+typedef struct {
+  UniChar      ch;
+  CGKeyCode    code;
+  CGEventFlags flags;
+} KeyEntry;
+
+typedef struct {
+  KeyEntry e[1024];
+  int      n;
+} KeyMap;
+
+static int
+keymap_find (const KeyMap *m, UniChar ch)
 {
+  int i;
+
+  for (i = 0; i < m->n; i++)
+    if (m->e[i].ch == ch)
+      return i;
+  return -1;
+}
+
+/* Main thread only (Text Input Source calls assert that on recent macOS). */
+static int
+keymap_build (TISInputSourceRef src, KeyMap *m)
+{
+  /* fewest modifiers first, so 'a' maps to plain a, not Option-something */
+  static const struct { UInt32 carbon; CGEventFlags cg; } mods[] = {
+    { 0, 0 },
+    { shiftKey, kCGEventFlagMaskShift },
+    { optionKey, kCGEventFlagMaskAlternate },
+    { shiftKey | optionKey, kCGEventFlagMaskShift | kCGEventFlagMaskAlternate },
+  };
+  CFDataRef data;
+  const UCKeyboardLayout *layout;
+  unsigned mi;
+  UInt16 kc;
+
+  m->n = 0;
+  if (!src)
+    return 0;
+  data = TISGetInputSourceProperty (src, kTISPropertyUnicodeKeyLayoutData);
+  if (!data)
+    return 0;
+  layout = (const UCKeyboardLayout *) CFDataGetBytePtr (data);
+  for (mi = 0; mi < sizeof mods / sizeof mods[0]; mi++)
+    for (kc = 0; kc < 128; kc++)
+      {
+        UInt32 dead = 0;
+        UniCharCount len = 0;
+        UniChar out[4];
+
+        if (UCKeyTranslate (layout, kc, kUCKeyActionDown, (mods[mi].carbon >> 8) & 0xFF,
+                            LMGetKbdType (), kUCKeyTranslateNoDeadKeysMask, &dead,
+                            4, &len, out) != noErr || len != 1)
+          continue;
+        if (keymap_find (m, out[0]) < 0 && m->n < (int) (sizeof m->e / sizeof m->e[0]))
+          {
+            m->e[m->n].ch = out[0];
+            m->e[m->n].code = kc;
+            m->e[m->n].flags = mods[mi].cg;
+            m->n++;
+          }
+      }
+  return m->n;
+}
+
+static int
+keymap_covers (const KeyMap *m, const UniChar *u, CFIndex len)
+{
+  CFIndex i;
+
+  for (i = 0; i < len; i++)
+    if (keymap_find (m, u[i]) < 0)
+      return 0;
+  return 1;
+}
+
+/* One character: the real key (with modifiers) when the layout has it, and the character
+ * attached as well; Unicode-only as a last resort. */
+static void
+post_char (CGEventSourceRef src, const KeyMap *m, const UniChar *u, unsigned long n, int *unmapped)
+{
+  int idx = n == 1 ? keymap_find (m, u[0]) : -1;
   int down;
 
+  if (idx < 0)
+    (*unmapped)++;
   for (down = 1; down >= 0; down--)
     {
-      CGEventRef ev = CGEventCreateKeyboardEvent (src, 0, down ? true : false);
+      CGEventRef ev = CGEventCreateKeyboardEvent (src, idx >= 0 ? m->e[idx].code : 0, down ? true : false);
 
       if (!ev)
         continue;
+      CGEventSetFlags (ev, idx >= 0 ? m->e[idx].flags : 0);
       CGEventKeyboardSetUnicodeString (ev, n, u);
       CGEventPost (kCGHIDEventTap, ev);
       CFRelease (ev);
-      usleep (12000);
+      usleep (15000);
     }
 }
 
-/* Type pw (UTF-8) into the focused lock screen field and press Return. */
+/* Type pw (UTF-8) into the lock screen field and press Return. Runs on q. */
 static void
 type_password (const char *pw)
 {
@@ -106,55 +200,119 @@ type_password (const char *pw)
   CFIndex len, i;
   UniChar *units;
   CGEventSourceRef src;
-  int waited;
+  KeyMap *map = calloc (1, sizeof *map);
+  __block TISInputSourceRef restore = NULL;
+  __block int switched = 0;
+  int waited, was_asleep, unmapped = 0;
 
+  if (!map)
+    return;
   if (!AXIsProcessTrusted ())
     {
       logf_ ("cannot type: Accessibility permission missing for %s", RK_AGENT_PATH);
+      free (map);
       return;
     }
   s = CFStringCreateWithCString (NULL, pw, kCFStringEncodingUTF8);
   if (!s)
-    return;
+    {
+      free (map);
+      return;
+    }
   len = CFStringGetLength (s);
   units = calloc ((size_t) len + 1, sizeof *units);
   if (!units)
     {
       CFRelease (s);
+      free (map);
       return;
     }
   CFStringGetCharacters (s, CFRangeMake (0, len), units);
   CFRelease (s);
 
-  src = CGEventSourceCreate (kCGEventSourceStateHIDSystemState);
+  /* Key map of the active layout; if it cannot produce every character (e.g. Greek active,
+   * Latin password), switch to the user's Latin layout while typing. */
+  dispatch_sync (dispatch_get_main_queue (), ^{
+    TISInputSourceRef cur = TISCopyCurrentKeyboardLayoutInputSource ();
 
-  /* Wake the display and bring up the password field. */
+    keymap_build (cur, map);
+    if (!keymap_covers (map, units, len))
+      {
+        TISInputSourceRef ascii = TISCopyCurrentASCIICapableKeyboardLayoutInputSource ();
+        KeyMap *alt = calloc (1, sizeof *alt);
+
+        if (ascii && alt && keymap_build (ascii, alt) && keymap_covers (alt, units, len))
+          {
+            TISInputSourceRef prev = TISCopyCurrentKeyboardInputSource ();   /* may be an IME */
+
+            if (TISSelectInputSource (ascii) == noErr)
+              {
+                memcpy (map, alt, sizeof *map);
+                restore = prev;          /* released after restoring */
+                switched = 1;
+              }
+            else if (prev)
+              CFRelease (prev);
+          }
+        free (alt);
+        if (ascii)
+          CFRelease (ascii);
+      }
+    if (cur)
+      CFRelease (cur);
+  });
+  if (switched)
+    logf_ ("switched to the Latin keyboard layout for typing");
+
+  src = CGEventSourceCreate (kCGEventSourceStatePrivate);
+
+  /* Wake the display and let the password field appear (it fades in on Tahoe). */
+  was_asleep = CGDisplayIsAsleep (CGMainDisplayID ()) ? 1 : 0;
   post_key (src, KEY_SHIFT, 0);
-  for (waited = 0; CGDisplayIsAsleep (CGMainDisplayID ()) && waited < 3000; waited += 100)
+  for (waited = 0; CGDisplayIsAsleep (CGMainDisplayID ()) && waited < 4000; waited += 100)
     usleep (100000);
-  usleep (waited ? 900000 : 300000);
+  usleep (was_asleep ? 1500000 : 800000);
 
-  /* Replace anything already typed in the field. */
-  post_key (src, KEY_A, kCGEventFlagMaskCommand);
+  /* Clear anything already in the field (Backspace on an empty field does nothing). */
+  for (i = 0; i < 32; i++)
+    post_key (src, KEY_BACKSPACE, 0);
+  usleep (100000);
 
   for (i = 0; i < len; i++)
     {
       /* keep surrogate pairs (emoji etc.) in one event */
       if (units[i] >= 0xD800 && units[i] <= 0xDBFF && i + 1 < len)
         {
-          post_units (src, &units[i], 2);
+          post_char (src, map, &units[i], 2, &unmapped);
           i++;
         }
       else
-        post_units (src, &units[i], 1);
+        post_char (src, map, &units[i], 1, &unmapped);
     }
   memset_s (units, ((size_t) len + 1) * sizeof *units, 0, ((size_t) len + 1) * sizeof *units);
   free (units);
+  memset_s (map, sizeof *map, 0, sizeof *map);
+  free (map);
 
-  post_key (src, KEY_RETURN, 0);
+  usleep (100000);
+  if (!test_mode)
+    post_key (src, KEY_RETURN, 0);
   if (src)
     CFRelease (src);
-  logf_ ("typed the password into the lock screen");
+
+  if (switched)
+    {
+      usleep (300000);
+      dispatch_sync (dispatch_get_main_queue (), ^{
+        if (restore)
+          {
+            TISSelectInputSource (restore);
+            CFRelease (restore);
+          }
+      });
+    }
+  logf_ ("typed the password into the lock screen (%ld characters, %d without a key on this layout)",
+         (long) len, unmapped);
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -209,9 +367,22 @@ handle_reply (xpc_object_t reply, unsigned gen)
               memset_s (copy, strlen (copy), 0, strlen (copy));
               free (copy);
             }
-          /* Normally the unlock notification arrives now. If the screen is still locked
-           * (e.g. the display was still waking), wait for another touch. */
-          retry_later (gen, 4);
+          /* Normally the unlock notification arrives now. If the screen is still locked,
+           * the password was not accepted: allow one more touch, then stop for this lock so
+           * we never pile up wrong-password attempts. */
+          dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 4 * (int64_t) NSEC_PER_SEC), q, ^{
+            if (gen != lock_gen || !locked)
+              return;
+            if (++typed_fail >= MAX_TYPED_FAIL)
+              {
+                logf_ ("typed the password %d times but the screen stayed locked - giving up "
+                       "for this lock (please report this)", typed_fail);
+                gave_up = 1;
+                return;
+              }
+            logf_ ("typed but the screen is still locked - touch the sensor again");
+            start_unlock ();
+          });
           return;
         }
       if (++no_match >= MAX_NO_MATCH)
@@ -272,6 +443,7 @@ set_locked (int now_locked)
   lock_gen++;
   gave_up = 0;
   no_match = 0;
+  typed_fail = 0;
   logf_ ("screen %s", locked ? "locked - waiting for a finger" : "unlocked");
   if (locked)
     start_unlock ();
@@ -317,6 +489,31 @@ main (int argc, char **argv)
   if (argc > 1 && strcmp (argv[1], "--version") == 0)
     {
       printf ("ridgekey-agent %s\n", RK_VERSION);
+      return 0;
+    }
+  if (argc > 1 && strcmp (argv[1], "--type-test") == 0)
+    {
+      /* Same typing code as the lock screen, with a sample instead of the password and no
+       * Return. Run it from Terminal, click into an empty TextEdit document within 5 s, and
+       * compare what appears with the sample. */
+      static const char sample[] = "RidgeKey-3#Ab$9 xyz \xc3\xa9";   /* ends in e-acute */
+
+      test_mode = 1;
+      if (!AXIsProcessTrusted ())
+        {
+          fprintf (stderr, "Grant Accessibility to the app you run this from (Terminal), then retry.\n");
+          return 1;
+        }
+      printf ("Click into an empty TextEdit document. Typing in 5 s:\n  expected: %s\n", sample);
+      fflush (stdout);
+      q = dispatch_queue_create ("io.github.labrouss.ridgekey.agent.test", DISPATCH_QUEUE_SERIAL);
+      dispatch_async (q, ^{
+        sleep (5);
+        type_password (sample);
+        printf ("done - does TextEdit show exactly the expected text?\n");
+        exit (0);
+      });
+      CFRunLoopRun ();
       return 0;
     }
 

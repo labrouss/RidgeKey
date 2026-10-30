@@ -45,7 +45,11 @@ Add `-v` to see finger on/off events. Ctrl-C cancels. Exit code 3 = daemon not r
    (`/usr/local/ridgekey/bin/ridgekey-agent`). After an upgrade, remove it with "−" and add it
    again with "+"; the build is signed without a developer certificate, so macOS treats each
    build as a new app.
-3. Lock the screen (Ctrl-Cmd-Q) and touch the sensor.
+3. Optional check: `/usr/local/ridgekey/bin/ridgekey-agent --type-test`, run from Terminal,
+   types a sample (capitals, digits, symbols, an accented letter) into whatever app has focus,
+   using the same code as the lock screen but without Return. Click into an empty TextEdit
+   document and compare the text with the sample it prints.
+4. Lock the screen (Ctrl-Cmd-Q) and touch the sensor.
 
 **How it works:**
 - `ridgekey-agent` runs in your login session (LaunchAgent). When the screen locks it asks
