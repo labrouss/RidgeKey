@@ -1,0 +1,107 @@
+#!/bin/bash
+# ridgekey-sudo - turn fingerprint authentication for sudo on or off.
+#
+#   sudo ridgekey-sudo enable     add pam_ridgekey to /etc/pam.d/sudo_local (fingerprint first,
+#                                 then the normal password)
+#   sudo ridgekey-sudo disable    remove it again
+#   ridgekey-sudo status
+#
+# Safety:
+#   - Uses sudo_local, which macOS includes from /etc/pam.d/sudo and keeps across updates.
+#     /etc/pam.d/sudo itself is never edited.
+#   - Before editing, proves OpenPAM can load the module (a throwaway "ridgekey-check" service).
+#   - The line is "sufficient": no match / timeout / Ctrl-C / daemon down -> password prompt.
+#   - A backup of sudo_local is kept next to it.
+# If sudo ever breaks, fix the file with an admin password prompt that does not use sudo:
+#   osascript -e 'do shell script "sed -i \"\" /pam_ridgekey/d /etc/pam.d/sudo_local" with administrator privileges'
+set -euo pipefail
+
+PAMD="${RK_PAM_DIR:-/etc/pam.d}"            # override for tests only
+RK_HOME="${RK_HOME:-/usr/local/ridgekey}"
+MODULE="$RK_HOME/lib/pam/pam_ridgekey.so"
+PAMCHECK="$RK_HOME/bin/ridgekey-pamcheck"
+LOCAL="$PAMD/sudo_local"
+TAG="# RidgeKey fingerprint (ridgekey-sudo)"
+LINE="auth       sufficient     $MODULE"
+
+die() { echo "ridgekey-sudo: $*" >&2; exit 1; }
+is_enabled() { [ -f "$LOCAL" ] && grep -q '^[^#]*pam_ridgekey\.so' "$LOCAL"; }
+
+need_root() {
+  [ -n "${RK_PAM_DIR:-}" ] && return 0     # test mode
+  [ "$(id -u)" = 0 ] || die "run with sudo"
+}
+
+# The module is loaded into sudo as root: it and every directory above it must be root-owned
+# and not writable by anyone else.
+check_module_perms() {
+  local p="$MODULE"
+  [ -f "$p" ] || die "$p not found - install RidgeKey first"
+  [ -n "${RK_PAM_DIR:-}" ] && return 0
+  while [ "$p" != "/" ]; do
+    read -r mode owner < <(stat -f '%Lp %Su' "$p")
+    [ "$owner" = root ] || die "$p is owned by $owner, not root"
+    [ $(( 8#$mode & 8#022 )) -eq 0 ] || die "$p is group/world writable ($mode)"
+    p="$(dirname "$p")"
+  done
+}
+
+# Prove OpenPAM can load and run the module before sudo depends on it.
+load_check() {
+  local svc="$PAMD/ridgekey-check" out
+  [ -x "$PAMCHECK" ] || die "$PAMCHECK not found - reinstall RidgeKey"
+  printf 'auth       sufficient     %s noop\nauth       required       pam_deny.so\n' "$MODULE" > "$svc"
+  chmod 444 "$svc"
+  out="$("$PAMCHECK" ridgekey-check "${SUDO_USER:-$(id -un)}" 2>&1)" || true
+  rm -f "$svc"
+  echo "$out" | grep -q '^result=PAM_AUTH_ERR$' \
+    || die "OpenPAM could not load the module - sudo_local NOT changed. Output:
+$out"
+  echo "    module load check passed"
+}
+
+do_enable() {
+  need_root
+  check_module_perms
+  [ -z "${RK_PAM_DIR:-}" ] && { grep -q 'sudo_local' "$PAMD/sudo" \
+    || die "$PAMD/sudo does not include sudo_local (needs macOS 14 or later)"; }
+  if is_enabled; then echo "Fingerprint for sudo is already enabled."; return 0; fi
+  [ -n "${RK_SKIP_LOAD_CHECK:-}" ] || load_check
+
+  local tmp
+  tmp="$(mktemp "$PAMD/.sudo_local.XXXXXX")"
+  {
+    echo "$TAG"
+    echo "$LINE"
+    if [ -f "$LOCAL" ]; then
+      cp -p "$LOCAL" "$LOCAL.ridgekey-backup"
+      grep -v 'pam_ridgekey\.so' "$LOCAL" | grep -vF "$TAG" || true
+    else
+      echo "# sudo_local: local config file which survives system update and is included for sudo"
+    fi
+  } > "$tmp"
+  chmod 444 "$tmp"
+  [ -z "${RK_PAM_DIR:-}" ] && chown root:wheel "$tmp"
+  mv -f "$tmp" "$LOCAL"
+  echo "Enabled: sudo asks for your fingerprint first, then your password."
+  echo "Test it in a NEW terminal:  sudo -k; sudo -v"
+}
+
+do_disable() {
+  need_root
+  if ! is_enabled; then echo "Fingerprint for sudo is not enabled."; return 0; fi
+  local tmp
+  tmp="$(mktemp "$PAMD/.sudo_local.XXXXXX")"
+  { grep -v 'pam_ridgekey\.so' "$LOCAL" | grep -vF "$TAG" || true; } > "$tmp"
+  chmod 444 "$tmp"
+  [ -z "${RK_PAM_DIR:-}" ] && chown root:wheel "$tmp"
+  mv -f "$tmp" "$LOCAL"
+  echo "Disabled: sudo uses your password only."
+}
+
+case "${1:-status}" in
+  enable)  do_enable ;;
+  disable) do_disable ;;
+  status)  if is_enabled; then echo "enabled ($LOCAL)"; else echo "disabled"; fi ;;
+  *)       echo "usage: ridgekey-sudo enable|disable|status"; exit 2 ;;
+esac

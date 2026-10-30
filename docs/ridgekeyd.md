@@ -1,4 +1,4 @@
-# ridgekeyd and ridgekeyctl
+# ridgekeyd, ridgekeyctl and sudo
 
 `ridgekeyd` is a root launchd daemon that owns the fingerprint sensor. Clients talk to it over
 XPC on the Mach service **`io.github.labrouss.ridgekey`** (system domain). `ridgekeyctl` is the
@@ -38,6 +38,46 @@ sudo ridgekeyctl -u alice list     act on another user
 ```
 Add `-v` to see finger on/off events. Ctrl-C cancels. Exit code 3 = daemon not reachable.
 
+## Fingerprint for sudo
+
+```sh
+sudo ridgekey-sudo enable      # then, in a NEW terminal:  sudo -k; sudo -v
+sudo ridgekey-sudo disable
+ridgekey-sudo status
+```
+
+`enable` adds one line at the top of `/etc/pam.d/sudo_local`. macOS includes that file from
+`/etc/pam.d/sudo` and keeps it across updates; `/etc/pam.d/sudo` itself is never edited.
+
+```
+auth       sufficient     /usr/local/ridgekey/lib/pam/pam_ridgekey.so
+```
+
+| You do | sudo does |
+|---|---|
+| touch with an enrolled finger | runs, no password |
+| wrong finger ×3, no touch within 10 s, Ctrl-C | asks for your password as usual |
+| no prints enrolled, daemon stopped, sensor busy | asks for your password straight away |
+| SSH session | password only. Otherwise whoever is at the laptop could approve a remote `sudo` with a touch. Add `allow_remote` to the line to override. |
+
+Module options (append to the line): `timeout=N` (seconds per try, default 10), `tries=N`
+(default 3), `allow_remote`, `debug` (logs to the system log).
+
+**Safety:**
+- Before editing, `ridgekey-sudo` checks that the module and every folder above it are owned by
+  root and not writable by others.
+- It then proves OpenPAM can load the module with a throwaway PAM service, using
+  `ridgekey-pamcheck`, before sudo depends on it.
+- A backup is kept as `sudo_local.ridgekey-backup`.
+- `uninstall.sh` removes the line **before** deleting any file, and upgrades swap the install
+  folder in one step. OpenPAM fails the whole sudo stack when a listed module is missing, so the
+  module path must never disappear while the line is there.
+
+**If sudo ever breaks**, remove the line through an administrator prompt that doesn't use sudo:
+```sh
+osascript -e 'do shell script "sed -i \"\" /pam_ridgekey/d /etc/pam.d/sudo_local" with administrator privileges'
+```
+
 ## Permissions
 
 | Operation | Who |
@@ -64,11 +104,11 @@ the `finger`, `enroll-progress` and `retry` events, reply fields, and error code
 `no-device`, `permission`, `not-found`, `no-prints`, `timeout`, `cancelled`, `data-full`, `storage`,
 `failed`, `bad-request`).
 
-## Known limitations (0.1.0)
+## Known limitations (0.2.0)
 
 - **Callers are identified by their effective uid** (`xpc_connection_get_euid`). A later version
   should check code signatures, for example to allow only the RidgeKey app to enroll.
 - **Enroll needs no password:** any process running as you can start an enrollment, but it still
   needs a finger on the sensor. The GUI will ask for your password first.
-- **Unlocking isn't wired up yet.** No lock screen, `sudo` (PAM) or Authorization plugin
-  integration yet; those come next and build on `verify` / `identify`.
+- **Only sudo for now.** The lock screen, screen saver and Authorization plugin
+  (system dialogs) come next and build on `verify` / `identify`.

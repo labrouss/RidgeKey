@@ -16,6 +16,17 @@ PURGE=0
 
 [ "$(id -u)" = 0 ] || { echo "Run with sudo: sudo $0 ${1:-}"; exit 1; }
 
+# First take pam_ridgekey out of sudo, BEFORE the module file disappears.
+if [ -f /etc/pam.d/sudo_local ] && grep -q 'pam_ridgekey\.so' /etc/pam.d/sudo_local; then
+  echo "==> Removing fingerprint from sudo"
+  if [ -x "$DEST/bin/ridgekey-sudo" ]; then
+    "$DEST/bin/ridgekey-sudo" disable
+  else
+    sed -i '' -e '/pam_ridgekey\.so/d' -e '/# RidgeKey fingerprint/d' /etc/pam.d/sudo_local
+  fi
+  grep -q 'pam_ridgekey\.so' /etc/pam.d/sudo_local && { echo "Could not remove pam_ridgekey from sudo_local - aborting"; exit 1; }
+fi
+
 if [ $PURGE = 1 ]; then
   if launchctl print "system/$LABEL" >/dev/null 2>&1 && [ -x "$DEST/bin/ridgekeyctl" ]; then
     echo "==> Deleting RidgeKey prints from the sensor"
@@ -32,7 +43,7 @@ echo "==> Stopping and removing the daemon"
 launchctl bootout "system/$LABEL" 2>/dev/null || true
 rm -f "$PLIST"
 rm -rf "$DEST"
-[ -L /usr/local/bin/ridgekeyctl ] && rm -f /usr/local/bin/ridgekeyctl
+for l in ridgekeyctl ridgekey-sudo; do [ -L "/usr/local/bin/$l" ] && rm -f "/usr/local/bin/$l"; done
 
 if [ $PURGE = 1 ]; then
   rm -rf "$DATA" /Library/Logs/RidgeKey

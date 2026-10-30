@@ -3,7 +3,9 @@
 #
 # Installs:
 #   /usr/local/ridgekey/{bin,lib}                       daemon, client, bundled libraries
-#   /usr/local/bin/ridgekeyctl                          symlink
+#   /usr/local/bin/ridgekeyctl, ridgekey-sudo           symlinks
+#   /usr/local/ridgekey/lib/pam/pam_ridgekey.so         PAM module (sudo is NOT changed - run
+#                                                       'sudo ridgekey-sudo enable' for that)
 #   /Library/LaunchDaemons/io.github.labrouss.ridgekey.plist
 #   /Library/Logs/RidgeKey/                             daemon log
 #   /Library/Application Support/RidgeKey/prints/       print record (created by the daemon, 0700)
@@ -34,13 +36,22 @@ mkdir -p "$DEST.new"
 cp -R "$SRC/bin" "$SRC/lib" "$DEST.new/"
 [ -d "$SRC/licenses" ] && cp -R "$SRC/licenses" "$DEST.new/"
 cp "$SRC/BUILDINFO.txt" "$DEST.new/" 2>/dev/null || true
-rm -rf "$DEST" && mv "$DEST.new" "$DEST"
-chown -R root:wheel "$DEST"
-chmod -R go-w "$DEST"
-xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
+install -m 755 "$SRC/ridgekey-sudo" "$DEST.new/bin/ridgekey-sudo"
+chown -R root:wheel "$DEST.new"
+chmod -R go-w "$DEST.new"
+chmod 444 "$DEST.new/lib/pam/pam_ridgekey.so"
+xattr -dr com.apple.quarantine "$DEST.new" 2>/dev/null || true
+# Swap in one step: if sudo_local already uses pam_ridgekey.so, the module path must never
+# be missing (OpenPAM fails the whole sudo stack when a listed module cannot be loaded).
+if [ -d "$DEST" ]; then
+  rm -rf "$DEST.old"; mv "$DEST" "$DEST.old"; mv "$DEST.new" "$DEST"; rm -rf "$DEST.old"
+else
+  mv "$DEST.new" "$DEST"
+fi
 
 mkdir -p /usr/local/bin
 ln -sf "$DEST/bin/ridgekeyctl" /usr/local/bin/ridgekeyctl
+ln -sf "$DEST/bin/ridgekey-sudo" /usr/local/bin/ridgekey-sudo
 
 mkdir -p /Library/Logs/RidgeKey
 chmod 755 /Library/Logs/RidgeKey
@@ -61,5 +72,6 @@ Installed. Try (as your normal user, no sudo):
   ridgekeyctl enroll right-index
   ridgekeyctl verify
   ridgekeyctl list
+Fingerprint for sudo (optional, password still works):  sudo ridgekey-sudo enable
 Log: /Library/Logs/RidgeKey/ridgekeyd.log      Uninstall: sudo ./uninstall.sh [--purge]
 EOF

@@ -1,7 +1,7 @@
 # RidgeKey - daemon and command-line client
 # SPDX-License-Identifier: MIT
 project('ridgekey', 'c',
-  version: '0.1.0',
+  version: '0.2.0',
   license: 'MIT',
   meson_version: '>= 0.59.0',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=debugoptimized'])
@@ -36,4 +36,20 @@ executable('ridgekeyd',
 executable('ridgekeyctl',
   ['ctl/ridgekeyctl.c'],
   include_directories: common_inc,
+  install: true)
+
+# PAM module for sudo (and later other services). Loaded by sudo from an absolute path.
+pam_dep = cc.find_library('pam')
+shared_module('pam_ridgekey',
+  ['pam/pam_ridgekey.c'],
+  include_directories: common_inc,
+  dependencies: [pam_dep],
+  name_prefix: '',
+  name_suffix: 'so',
+  install: true,
+  install_dir: get_option('libdir') / 'pam')
+
+executable('ridgekey-pamcheck',
+  ['tools/ridgekey-pamcheck.c'],
+  dependencies: [pam_dep],
   install: true)

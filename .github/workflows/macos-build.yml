@@ -10,7 +10,7 @@ on:
     branches: [main]
     tags: ['libfprint-macos-*', 'v*']
     paths:
-      - 'ci/build-libfprint-macos.sh'
+      - 'ci/**'
       - 'patches/libfprint/**'
       - 'src/**'
       - 'launchd/**'
@@ -19,7 +19,7 @@ on:
       - '.github/workflows/macos-build.yml'
   pull_request:
     paths:
-      - 'ci/build-libfprint-macos.sh'
+      - 'ci/**'
       - 'patches/libfprint/**'
       - 'src/**'
       - 'launchd/**'
@@ -104,8 +104,22 @@ jobs:
             ~/src/fprint-build/ridgekey-build/meson-logs/meson-log.txt
           if-no-files-found: ignore
 
-  release:
+  install-test:
+    # Fresh runner: install the bundle for real, exercise daemon + XPC + PAM + sudo_local, uninstall.
     needs: build
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ridgekey-macos-x86_64
+          path: dist
+      - name: Install and test
+        run: bash ci/install-test.sh dist/ridgekey-*-macos-x86_64.tar.gz
+
+  release:
+    needs: [build, install-test]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

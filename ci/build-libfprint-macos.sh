@@ -5,7 +5,8 @@
 # on macOS x86_64 and packages a RELOCATABLE bundle:
 #   bin/ridgekeyd bin/ridgekeyctl                  the daemon and its client
 #   bin/{enroll,verify,identify,manage-prints}     libfprint examples (diagnostics)
-#   lib/*.dylib  launchd/  install.sh  uninstall.sh
+#   bin/ridgekey-pamcheck  lib/pam/pam_ridgekey.so    sudo fingerprint (opt-in via ridgekey-sudo)
+#   lib/*.dylib  launchd/  install.sh  uninstall.sh  ridgekey-sudo
 # Same script runs in GitHub Actions (.github/workflows/libfprint-macos.yml) and on a Mac.
 #
 # Needs: Xcode CLT (clang, git, python3, perl), network. No Homebrew, no sudo.
@@ -227,19 +228,29 @@ mkdir -p "$BUNDLE/lib/pkgconfig"
 for pc in "$PREFIX"/lib/pkgconfig/*.pc; do
   sed "s|^prefix=.*|prefix=\${pcfiledir}/../..|" "$pc" > "$BUNDLE/lib/pkgconfig/$(basename "$pc")"
 done
-for b in ridgekeyd ridgekeyctl; do
+for b in ridgekeyd ridgekeyctl ridgekey-pamcheck; do
   [ -x "$PREFIX/bin/$b" ] || die "$b not built"
   cp "$PREFIX/bin/$b" "$BUNDLE/bin/"
 done
 mkdir -p "$BUNDLE/launchd"
 cp "$REPO/launchd/"*.plist "$BUNDLE/launchd/"
-cp "$REPO/scripts/install.sh" "$REPO/scripts/uninstall.sh" "$BUNDLE/"
-chmod 755 "$BUNDLE/install.sh" "$BUNDLE/uninstall.sh"
+cp "$REPO/scripts/install.sh" "$REPO/scripts/uninstall.sh" "$REPO/scripts/ridgekey-sudo" "$BUNDLE/"
+chmod 755 "$BUNDLE/install.sh" "$BUNDLE/uninstall.sh" "$BUNDLE/ridgekey-sudo"
 for ex in $EXAMPLES; do
   [ -x "$WORK/libfprint/_build/examples/$ex" ] || die "example $ex not built"
   cp "$WORK/libfprint/_build/examples/$ex" "$BUNDLE/bin/"
 done
 relocate "$BUNDLE"
+
+# PAM module: loaded into sudo, so it must depend on system libraries only.
+mkdir -p "$BUNDLE/lib/pam"
+cp "$PREFIX/lib/pam/pam_ridgekey.so" "$BUNDLE/lib/pam/"
+codesign --force --sign - "$BUNDLE/lib/pam/pam_ridgekey.so" >/dev/null 2>&1 || die "codesign failed for pam_ridgekey.so"
+for d in $(otool -L "$BUNDLE/lib/pam/pam_ridgekey.so" | tail -n +2 | awk '{print $1}'); do
+  case "$d" in /usr/lib/*|/System/*) ;; *) die "pam_ridgekey.so links $d - must use system libraries only" ;; esac
+done
+nm -gU "$BUNDLE/lib/pam/pam_ridgekey.so" | grep -q '_pam_sm_authenticate$' || die "pam_sm_authenticate not exported"
+echo "    pam_ridgekey.so: system libraries only, pam_sm_authenticate exported"
 
 cp "$PATCHES"/*.patch "$BUNDLE/patches/"
 license_copy "$WORK/libfprint" libfprint
@@ -278,6 +289,10 @@ Use (as your normal user):
   ridgekeyctl verify                      # exit code 0 = match
   ridgekeyctl list
   ridgekeyctl delete right-index
+
+Fingerprint for sudo (optional; your password keeps working):
+  sudo ridgekey-sudo enable               # then test in a NEW terminal: sudo -k; sudo -v
+  sudo ridgekey-sudo disable
 
 Uninstall:  sudo ./uninstall.sh            (keeps prints)
             sudo ./uninstall.sh --purge    (deletes RidgeKey's prints from the sensor first)

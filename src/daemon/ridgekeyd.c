@@ -32,7 +32,7 @@
 
 #define RK_MAX_RETRIES          3
 #define RK_TIMEOUT_MATCH_DEF    30
-#define RK_TIMEOUT_MATCH_MAX    120
+#define RK_TIMEOUT_MATCH_MAX    RK_TIMEOUT_MAX_SECONDS
 #define RK_TIMEOUT_ENROLL       180
 #define RK_TIMEOUT_DELETE       60
 

@@ -33,8 +33,11 @@
 
 #include <string.h>
 
-#define RK_VERSION        "0.1.0"
+#define RK_VERSION        "0.2.0"
 #define RK_SERVICE_NAME   "io.github.labrouss.ridgekey"
+
+/* verify / identify wait at most this long for a finger */
+#define RK_TIMEOUT_MAX_SECONDS 120
 
 /* keys */
 #define RK_KEY_OP        "op"

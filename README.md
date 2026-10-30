@@ -19,8 +19,9 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 |---|---|---|
 | 1 | Reference capture on Linux (`linux/`), protocol notes (`docs/PROTOCOL-06cb-00f0.md`) | ✅ |
 | 2 | libfprint as a macOS library, with the example enroll/verify working against the 00f0 | ✅ |
-| 3 | `ridgekeyd` launchd daemon + `ridgekeyctl` client over XPC ([docs](docs/ridgekeyd.md)) | 🔧 0.1.0, waiting for its first test on the Mac |
-| 4 | Front-ends: SwiftUI settings and enrollment, lock-screen password typing, `sudo` PAM module, Authorization plugin | planned |
+| 3 | `ridgekeyd` launchd daemon + `ridgekeyctl` client over XPC ([docs](docs/ridgekeyd.md)) | ✅ 0.1.0 tested on the 840 G8 (enroll, verify, identify, cancel, reboot) |
+| 4a | `sudo` with fingerprint: `pam_ridgekey.so` + `ridgekey-sudo` ([docs](docs/ridgekeyd.md#fingerprint-for-sudo)) | 🔧 0.2.0 |
+| 4b | Front-ends: SwiftUI settings and enrollment, lock-screen password typing, Authorization plugin | planned |
 | 5 | Stored passwords: encrypted, root-only APFS volume with its key in the System keychain | planned |
 
 ## Try it
@@ -39,6 +40,10 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
    ridgekeyctl verify        # exit code 0 = match
    ridgekeyctl list
    ```
+4. Optional, fingerprint for `sudo` (your password keeps working):
+   ```sh
+   sudo ridgekey-sudo enable    # then in a NEW terminal: sudo -k; sudo -v
+   ```
 
 Details, permissions and the XPC API: [docs/ridgekeyd.md](docs/ridgekeyd.md).
 
@@ -46,7 +51,7 @@ Details, permissions and the XPC API: [docs/ridgekeyd.md](docs/ridgekeyd.md).
 
 | | |
 |---|---|
-| CI | `.github/workflows/macos-build.yml`: store unit tests on Linux, then a full build on GitHub's `macos-15-intel` runner |
+| CI | `.github/workflows/macos-build.yml`: store unit tests on Linux, a full build on GitHub's `macos-15-intel` runner, then an install test on a fresh runner (daemon, XPC permissions, the PAM module inside OpenPAM, sudo_local enable/disable, uninstall) |
 | Build | `ci/build-libfprint-macos.sh` (same script in CI and locally; Xcode CLT only, no Homebrew) |
 | Stack | libusb 1.0.30 → GLib 2.84 → gusb 0.3.10 → libfprint v1.94.10 (`-Ddrivers=synaptics`, `patches/libfprint/`) → `src/` |
 | Output | `ridgekey-<ver>-macos-x86_64.tar.gz`: relocatable and self-contained, with an installer |
