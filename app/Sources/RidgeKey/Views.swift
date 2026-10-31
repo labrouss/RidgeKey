@@ -68,6 +68,7 @@ struct ContentView: View {
             }
             .formStyle(.grouped)
             .navigationTitle((selection ?? .overview).title)
+            .sheet(item: $model.pendingAction) { ConfirmSheet(action: $0) }   // password-only confirmation
         }
         .toolbar {
             ToolbarItem {
@@ -218,7 +219,6 @@ struct FingerprintsView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
-        .sheet(item: $model.pendingAction) { ConfirmSheet(action: $0) }
     }
 }
 
@@ -443,7 +443,7 @@ struct ActionsView: View {
                     }
                     .disabled(model.fingers.isEmpty || draft.count >= 20)
                     Spacer()
-                    Button("Save") { Task { await model.saveActions(draft) } }
+                    Button("Save…") { model.saveActions(draft) }
                         .disabled(!model.reachable || draft == model.actions ||
                                   draft.contains { $0.action == "shortcut" && $0.shortcut.isEmpty })
                         .keyboardShortcut(.defaultAction)

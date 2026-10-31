@@ -24,6 +24,9 @@ ridgekeyctl action clear
 ```
 Up to 20 actions. Shortcut names must match the Shortcuts app exactly (the app offers a list).
 
+**Changes are confirmed** like enrolling: touch one of your enrolled fingers, or type your login
+password (`ridgekeyctl action … --password`). Listing them needs no confirmation.
+
 ## Gestures
 
 | Gesture | How | When it runs |

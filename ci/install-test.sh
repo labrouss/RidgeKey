@@ -75,38 +75,43 @@ expect_rc 1 "untrusted copy cannot set a password either" sh -c "echo x | '$WORK
 expect_out "untrusted-client" "password-set needs a trusted client"
 expect_rc 0 "untrusted copy may still read status" "$WORK/rkctl-copy" status
 
-echo "== 0.10: finger actions"
+echo "== 0.10: finger actions (changes need confirmation; root is exempt - the runner has no prints)"
+RK="sudo ridgekeyctl -u $ME"
 expect_rc 0 "no actions yet" ridgekeyctl actions
-expect_out "0 finger actions" "empty list"
-expect_rc 0 "add: tap left-index -> lock" ridgekeyctl action add left-index tap lock
-expect_rc 0 "add: hold right-thumb 2 s -> Shortcut" ridgekeyctl action add right-thumb hold 2 shortcut "Work mode"
+expect_out "0 finger actions" "empty list (listing needs no confirmation)"
+expect_rc 1 "a user cannot change actions without confirming" sh -c 'echo not-the-password | ridgekeyctl action add left-index tap lock --password --stdin'
+if echo "$LAST_OUT" | grep -qE "bad-password|locked-out"; then pass "password required for changes"; else fail "change was not refused"; fi
+expect_rc 1 "finger confirmation without enrolled prints" ridgekeyctl action add left-index tap lock --finger
+expect_out "auth-required" "first finger: password only"
+expect_rc 0 "add: tap left-index -> lock (root)" $RK action add left-index tap lock
+expect_rc 0 "add: hold right-thumb 2 s -> Shortcut" $RK action add right-thumb hold 2 shortcut "Work mode"
 expect_rc 0 "list" ridgekeyctl actions
 expect_out "2 finger actions" "two rules stored"
 expect_out 'Work mode' "shortcut name kept"
-expect_rc 0 "replacing the same finger + gesture" ridgekeyctl action add left-index tap shortcut "Focus"
+expect_rc 0 "replacing the same finger + gesture" $RK action add left-index tap shortcut "Focus"
 expect_rc 0 "list again" ridgekeyctl actions
 expect_out "2 finger actions" "replaced, not added"
-expect_rc 0 "add: double tap left-index -> Shortcut" ridgekeyctl action add left-index double shortcut "Two"
-expect_rc 0 "add: triple tap left-index -> lock" ridgekeyctl action add left-index triple lock
+expect_rc 0 "add: double tap left-index -> Shortcut" $RK action add left-index double shortcut "Two"
+expect_rc 0 "add: triple tap left-index -> lock" $RK action add left-index triple lock
 expect_rc 0 "list with multi-tap" ridgekeyctl actions
 expect_out "4 finger actions" "single, double and triple tap are separate rules"
 expect_out "double" "double tap listed"
 expect_out "triple" "triple tap listed"
-expect_rc 0 "remove only the triple tap" ridgekeyctl action remove left-index triple
+expect_rc 0 "remove only the triple tap" $RK action remove left-index triple
 expect_rc 0 "list" ridgekeyctl actions
 expect_out "3 finger actions" "only the triple tap removed"
-expect_rc 1 "hold 0 s refused" ridgekeyctl action add left-index hold 0 lock
+expect_rc 1 "hold 0 s refused" $RK action add left-index hold 0 lock
 expect_out "bad-request" "validation"
-expect_rc 1 "shortcut without a name refused" ridgekeyctl action add left-index tap shortcut
-expect_rc 1 "unknown action refused" ridgekeyctl action add left-index tap reboot
-expect_rc 1 "untrusted copy cannot change actions" "$WORK/rkctl-copy" action add left-index tap lock
+expect_rc 1 "shortcut without a name refused" $RK action add left-index tap shortcut
+expect_rc 1 "unknown action refused" $RK action add left-index tap reboot
+expect_rc 1 "untrusted copy cannot change actions" sh -c "echo x | '$WORK/rkctl-copy' action add left-index tap lock --password --stdin"
 expect_out "untrusted-client" "actions-set needs a trusted client"
 [ "$(sudo stat -f %Lp "/Library/Application Support/RidgeKey/actions/$(id -u).conf")" = 600 ] \
   && pass "rules file is 0600 (root)" || fail "rules file permissions"
 expect_rc 0 "status: not listening (no enrolled prints on the runner)" ridgekeyctl status
 if echo "$LAST_OUT" | grep -q "listening for finger actions"; then fail "listening without prints"; else pass "idle without prints"; fi
-expect_rc 0 "remove one" ridgekeyctl action remove right-thumb
-expect_rc 0 "clear" ridgekeyctl action clear
+expect_rc 0 "remove one" $RK action remove right-thumb
+expect_rc 0 "clear" $RK action clear
 expect_rc 0 "list after clear" ridgekeyctl actions
 expect_out "0 finger actions" "cleared"
 expect_rc 2 "unknown finger rejected by client" ridgekeyctl enroll left-toe

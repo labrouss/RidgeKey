@@ -121,9 +121,11 @@ reply_error (Request *r, const char *code, const char *fmt, ...)
 /* ------------------------------------------------------------------------------------------ */
 /* Daemon state                                                                                */
 
-typedef enum { OP_ENROLL, OP_VERIFY, OP_IDENTIFY, OP_DELETE, OP_PURGE, OP_UNLOCK, OP_AUTHORIZE, OP_LISTEN } OpKind;
+typedef enum { OP_ENROLL, OP_VERIFY, OP_IDENTIFY, OP_DELETE, OP_PURGE, OP_UNLOCK, OP_AUTHORIZE, OP_LISTEN,
+               OP_ACTIONS } OpKind;
 
-static const char *const op_names[] = { "enroll", "verify", "identify", "delete", "purge", "unlock", "authorize", "listen" };
+static const char *const op_names[] = { "enroll", "verify", "identify", "delete", "purge", "unlock", "authorize", "listen",
+                                        "actions-set" };
 
 typedef struct {
   OpKind        kind;
@@ -152,6 +154,7 @@ typedef struct {
   gint          misses;         /* authorize / confirm: fingers that matched nobody */
   gboolean      confirm;        /* enroll/delete: first match one of the user's enrolled fingers */
   GPtrArray    *rules;          /* listen: the console user's finger actions */
+  GPtrArray    *new_rules;      /* actions-set: to save once confirmed */
   gint64        present_since;  /* finger-status timing (monotonic us), for hold gestures */
   gint64        lifted_at;
   gboolean      finger_on;      /* last finger-status, for tap edges */
@@ -227,6 +230,7 @@ op_free (Op *op)
   g_free (op->right);
   g_free (op->client);
   g_clear_pointer (&op->rules, g_ptr_array_unref);
+  g_clear_pointer (&op->new_rules, g_ptr_array_unref);
   if (op->tap_timer)
     g_source_remove (op->tap_timer);
   g_free (op->username);
@@ -825,6 +829,18 @@ op_after_open (Op *op)
       op->present_since = op->lifted_at = 0;
       fp_device_identify (op->dev, op->gallery, op->cancel, NULL, NULL, NULL, on_listen_identified, op);
       break;
+    case OP_ACTIONS:
+      {
+        GError *err = NULL;
+
+        if (!actions_save (op->uid, op->new_rules, &err))
+          op->err_code = RK_ERR_STORAGE;
+        else
+          g_message ("uid %u: %u finger action(s) set for %s", (unsigned) op->req->caller,
+                     op->new_rules->len, op->username);
+        op_finish (op, err);           /* op_complete restarts listening with the new rules */
+        break;
+      }
     }
 }
 
@@ -924,6 +940,89 @@ require_trusted (Request *r, const char *what)
   return FALSE;
 }
 
+/* enroll / delete / actions-set: only installed clients, and only after confirming who is asking -
+ * the user's password (checked now) or one of their enrolled fingers (op->confirm: matched
+ * first, on the sensor). Root is exempt. Replies and returns FALSE on refusal. */
+static gboolean
+trusted_and_confirmed (Request *r, Op *op)
+{
+  const char *auth;
+
+  if (!require_trusted (r, op_names[op->kind]))
+    return FALSE;
+  if (r->caller == 0)
+    return TRUE;
+  auth = xpc_dictionary_get_string (r->msg, RK_KEY_AUTH);
+  if (auth && strcmp (auth, "finger") == 0)
+    {
+      op->gallery = store_load_user (op->uid);
+      if (op->gallery->len == 0)
+        {
+          reply_error (r, RK_ERR_AUTH_REQUIRED,
+                       "%s has no enrolled finger yet - confirm with your password", op->username);
+          return FALSE;
+        }
+      op->confirm = TRUE;
+      return TRUE;
+    }
+  if (auth && strcmp (auth, "password") == 0)
+    return check_password (r, op->uid, op->username, xpc_dictionary_get_string (r->msg, RK_KEY_PASSWORD));
+  reply_error (r, RK_ERR_AUTH_REQUIRED,
+               "confirm with your password or an enrolled finger (auth = password | finger)");
+  return FALSE;
+}
+
+/* actions-set: the "actions" array -> validated rules. Replies and returns FALSE on error. */
+static gboolean
+parse_rules (Request *r, GPtrArray **out)
+{
+  g_autoptr(GPtrArray) rules = g_ptr_array_new_with_free_func ((GDestroyNotify) rk_rule_free);
+  xpc_object_t arr = xpc_dictionary_get_value (r->msg, RK_KEY_ACTIONS);
+  size_t i, n;
+
+  if (!arr || xpc_get_type (arr) != XPC_TYPE_ARRAY)
+    {
+      reply_error (r, RK_ERR_BAD_REQUEST, "missing \"actions\" array");
+      return FALSE;
+    }
+  n = xpc_array_get_count (arr);
+  if (n > RK_ACTIONS_MAX)
+    {
+      reply_error (r, RK_ERR_BAD_REQUEST, "at most %d finger actions", RK_ACTIONS_MAX);
+      return FALSE;
+    }
+  for (i = 0; i < n; i++)
+    {
+      g_autoptr(GError) err = NULL;
+      xpc_object_t d = xpc_array_get_value (arr, i);
+      RkRule *rule = g_new0 (RkRule, 1);
+      const char *gesture = xpc_get_type (d) == XPC_TYPE_DICTIONARY ? xpc_dictionary_get_string (d, RK_KEY_GESTURE) : NULL;
+
+      if (xpc_get_type (d) == XPC_TYPE_DICTIONARY)
+        {
+          const char *sc = xpc_dictionary_get_string (d, RK_KEY_SHORTCUT);
+
+          rule->finger = (FpFinger) rk_finger_from_name (xpc_dictionary_get_string (d, RK_KEY_FINGER));
+          rule->hold = gesture && strcmp (gesture, "hold") == 0;
+          rule->seconds = (guint) xpc_dictionary_get_int64 (d, RK_KEY_SECONDS);
+          rule->taps = rule->hold ? 1 : (guint) MAX (1, xpc_dictionary_get_int64 (d, RK_KEY_TAPS));
+          rule->action = g_strdup (xpc_dictionary_get_string (d, RK_KEY_ACTION));
+          if (sc && *sc)
+            rule->shortcut = g_strdup (sc);
+        }
+      if ((gesture && strcmp (gesture, "tap") != 0 && strcmp (gesture, "hold") != 0) ||
+          !rk_rule_validate (rule, &err))
+        {
+          rk_rule_free (rule);
+          reply_error (r, RK_ERR_BAD_REQUEST, "rule %zu: %s", i + 1, err ? err->message : "unknown gesture");
+          return FALSE;
+        }
+      g_ptr_array_add (rules, rule);
+    }
+  *out = g_steal_pointer (&rules);
+  return TRUE;
+}
+
 /* Returns the started operation (now `current`), or NULL after replying with an error. */
 static Op *
 start_op (Request *r, OpKind kind)
@@ -971,45 +1070,40 @@ start_op (Request *r, OpKind kind)
         }
       op->finger = (FpFinger) finger;
 
-      /* 0.9: only installed clients, and only after confirming who is asking - the user's
-       * password, or one of their already enrolled fingers. Root is exempt. */
-      if (!require_trusted (r, op_names[kind]))
+      if (!trusted_and_confirmed (r, op))
         {
           op_free (op);
           return NULL;
         }
-      if (r->caller != 0)
-        {
-          const char *auth = xpc_dictionary_get_string (r->msg, RK_KEY_AUTH);
+    }
 
-          if (auth && strcmp (auth, "finger") == 0)
-            {
-              op->gallery = store_load_user (op->uid);
-              if (op->gallery->len == 0)
-                {
-                  reply_error (r, RK_ERR_AUTH_REQUIRED,
-                               "%s has no enrolled finger yet - confirm with your password", op->username);
-                  op_free (op);
-                  return NULL;
-                }
-              op->confirm = TRUE;
-            }
-          else if (auth && strcmp (auth, "password") == 0)
-            {
-              if (!check_password (r, op->uid, op->username,
-                                   xpc_dictionary_get_string (r->msg, RK_KEY_PASSWORD)))
-                {
-                  op_free (op);
-                  return NULL;
-                }
-            }
+  /* finger actions: parsed now, saved once confirmed (at once after a password / for root) */
+  if (kind == OP_ACTIONS)
+    {
+      g_autoptr(GError) err = NULL;
+
+      if (!parse_rules (r, &op->new_rules) || !trusted_and_confirmed (r, op))
+        {
+          op_free (op);
+          return NULL;
+        }
+      if (!op->confirm)
+        {
+          if (!actions_save (op->uid, op->new_rules, &err))
+            reply_error (r, RK_ERR_STORAGE, "%s", err->message);
           else
             {
-              reply_error (r, RK_ERR_AUTH_REQUIRED,
-                           "confirm with your password or an enrolled finger (auth = password | finger)");
-              op_free (op);
-              return NULL;
+              xpc_object_t reply = reply_new (r);
+
+              g_message ("uid %u: %u finger action(s) set for %s", (unsigned) r->caller,
+                         op->new_rules->len, op->username);
+              xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
+              xpc_dictionary_set_string (reply, RK_KEY_USER, op->username);
+              reply_send (r, reply);
             }
+          op_free (op);
+          listen_schedule (500);          /* pick up the new rules */
+          return NULL;
         }
     }
 
@@ -1018,6 +1112,13 @@ start_op (Request *r, OpKind kind)
     case OP_ENROLL:
       op->old_print = store_load (op->uid, op->finger, NULL);   /* NULL if none */
       timeout = RK_TIMEOUT_ENROLL;
+      break;
+
+    case OP_ACTIONS:                 /* only the finger confirmation needs the sensor */
+      timeout = RK_TIMEOUT_DELETE;
+      break;
+
+    case OP_LISTEN:                  /* never started through start_op */
       break;
 
     case OP_DELETE:
@@ -1585,72 +1686,6 @@ do_actions_get (Request *r)
 }
 
 static void
-do_actions_set (Request *r)
-{
-  uid_t uid;
-  g_autofree char *name = NULL;
-  g_autoptr(GPtrArray) rules = g_ptr_array_new_with_free_func ((GDestroyNotify) rk_rule_free);
-  g_autoptr(GError) err = NULL;
-  xpc_object_t arr, reply;
-  size_t i, n;
-
-  if (!resolve_user (r, &uid, &name))
-    return;
-  if (!require_trusted (r, "actions-set"))
-    return;
-  arr = xpc_dictionary_get_value (r->msg, RK_KEY_ACTIONS);
-  if (!arr || xpc_get_type (arr) != XPC_TYPE_ARRAY)
-    {
-      reply_error (r, RK_ERR_BAD_REQUEST, "missing \"actions\" array");
-      return;
-    }
-  n = xpc_array_get_count (arr);
-  if (n > RK_ACTIONS_MAX)
-    {
-      reply_error (r, RK_ERR_BAD_REQUEST, "at most %d finger actions", RK_ACTIONS_MAX);
-      return;
-    }
-  for (i = 0; i < n; i++)
-    {
-      xpc_object_t d = xpc_array_get_value (arr, i);
-      RkRule *rule = g_new0 (RkRule, 1);
-      const char *gesture = xpc_get_type (d) == XPC_TYPE_DICTIONARY ? xpc_dictionary_get_string (d, RK_KEY_GESTURE) : NULL;
-
-      if (xpc_get_type (d) == XPC_TYPE_DICTIONARY)
-        {
-          rule->finger = (FpFinger) rk_finger_from_name (xpc_dictionary_get_string (d, RK_KEY_FINGER));
-          rule->hold = gesture && strcmp (gesture, "hold") == 0;
-          rule->seconds = (guint) xpc_dictionary_get_int64 (d, RK_KEY_SECONDS);
-          rule->taps = rule->hold ? 1 : (guint) MAX (1, xpc_dictionary_get_int64 (d, RK_KEY_TAPS));
-          rule->action = g_strdup (xpc_dictionary_get_string (d, RK_KEY_ACTION));
-          if (xpc_dictionary_get_string (d, RK_KEY_SHORTCUT) && *xpc_dictionary_get_string (d, RK_KEY_SHORTCUT))
-            rule->shortcut = g_strdup (xpc_dictionary_get_string (d, RK_KEY_SHORTCUT));
-        }
-      if ((gesture && strcmp (gesture, "tap") != 0 && strcmp (gesture, "hold") != 0) ||
-          !rk_rule_validate (rule, &err))
-        {
-          rk_rule_free (rule);
-          reply_error (r, RK_ERR_BAD_REQUEST, "rule %zu: %s", i + 1, err ? err->message : "unknown gesture");
-          return;
-        }
-      g_ptr_array_add (rules, rule);
-    }
-  if (!actions_save (uid, rules, &err))
-    {
-      reply_error (r, RK_ERR_STORAGE, "%s", err->message);
-      return;
-    }
-  g_message ("uid %u: %u finger action(s) set for %s", (unsigned) r->caller, rules->len, name);
-  /* restart the listener with the new rules */
-  listen_stop ();
-  listen_schedule (500);
-  reply = reply_new (r);
-  xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
-  xpc_dictionary_set_string (reply, RK_KEY_USER, name);
-  reply_send (r, reply);
-}
-
-static void
 do_password_check (Request *r)
 {
   uid_t uid;
@@ -1737,7 +1772,7 @@ handle_request (gpointer data)
       (strcmp (op, RK_OP_ENROLL) == 0 || strcmp (op, RK_OP_VERIFY) == 0 ||
        strcmp (op, RK_OP_IDENTIFY) == 0 || strcmp (op, RK_OP_DELETE) == 0 ||
        strcmp (op, RK_OP_PURGE) == 0 || strcmp (op, RK_OP_UNLOCK) == 0 ||
-       strcmp (op, RK_OP_AUTHORIZE) == 0))
+       strcmp (op, RK_OP_AUTHORIZE) == 0 || strcmp (op, RK_OP_ACTIONS_SET) == 0))
     {
       g_queue_push_tail (&deferred, r);
       g_cancellable_cancel (current->cancel);
@@ -1765,7 +1800,7 @@ handle_request (gpointer data)
   else if (strcmp (op, RK_OP_ACTIONS_GET) == 0)
     do_actions_get (r);
   else if (strcmp (op, RK_OP_ACTIONS_SET) == 0)
-    do_actions_set (r);
+    return (start_op (r, OP_ACTIONS), G_SOURCE_REMOVE);
   else if (strcmp (op, RK_OP_ENROLL) == 0)
     return (start_op (r, OP_ENROLL), G_SOURCE_REMOVE);
   else if (strcmp (op, RK_OP_VERIFY) == 0)

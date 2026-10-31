@@ -251,7 +251,7 @@ Or in the app: **Finger Actions**.
 | **password-set, password-clear** | the user, through a **trusted client** (set also checks the password); root for anyone |
 | password-check | the user; root for anyone |
 | actions-get | the user; root for anyone |
-| actions-set | the user, through a **trusted client**; root for anyone |
+| actions-set | the user, through a **trusted client**, after **confirming** (like enroll); root for anyone |
 | identify, purge | root only |
 | authorize | root only (the authorization plugin); console user present, screen unlocked |
 | unlock | the RidgeKey Agent only (path, signature, hardened runtime, root-owned) |

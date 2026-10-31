@@ -58,17 +58,19 @@ final class AppModel: ObservableObject {
     // enroll / delete need a confirmation (0.9): an enrolled finger or the login password
     enum Confirmation { case finger, password(String) }
     enum PendingAction: Identifiable {
-        case enroll(String), delete(String)
+        case enroll(String), delete(String), saveActions([FingerAction])
         var id: String {
             switch self {
             case .enroll(let f): return "enroll-" + f
             case .delete(let f): return "delete-" + f
+            case .saveActions: return "save-actions"
             }
         }
         var title: String {
             switch self {
             case .enroll(let f): return "Enroll \(RK.label(f).lowercased())"
             case .delete(let f): return "Delete \(RK.label(f).lowercased())"
+            case .saveActions: return "Save finger actions"
             }
         }
     }
@@ -191,10 +193,12 @@ final class AppModel: ObservableObject {
     // MARK: enroll / delete
 
     private func run(_ action: PendingAction, _ confirmation: Confirmation) {
-        let (op, finger): (String, String)
+        var request: [String: Any]
+        var (op, finger) = ("", "")
         switch action {
-        case .enroll(let f): (op, finger) = ("enroll", f)
-        case .delete(let f): (op, finger) = ("delete", f)
+        case .enroll(let f): (op, finger) = ("enroll", f); request = ["op": op, "finger": f]
+        case .delete(let f): (op, finger) = ("delete", f); request = ["op": op, "finger": f]
+        case .saveActions(let list): op = "actions-set"; request = ["op": op, "actions": Self.rulesPayload(list)]
         }
         let label = RK.label(finger).lowercased()
         enrollFinger = finger
@@ -206,12 +210,13 @@ final class AppModel: ObservableObject {
             enrollMessage = "Touch one of your enrolled fingers - or type your login password."
         } else {
             confirming = false
-            enrollMessage = op == "enroll" ? "Touch the sensor with your \(label) finger." : "Deleting…"
+            enrollMessage = op == "enroll" ? "Touch the sensor with your \(label) finger."
+                : op == "delete" ? "Deleting…" : "Saving…"
         }
         activity = action
         Task {
             let r = await RKClient.call(
-                (["op": op, "finger": finger] as [String: Any]).merging(authFields(confirmation)) { $1 },
+                request.merging(authFields(confirmation)) { $1 },
                 onStart: { [weak self] o in self?.currentOperation = o },
                 onEvent: { [weak self] event in self?.handleEvent(event) })
             currentOperation = nil
@@ -222,7 +227,16 @@ final class AppModel: ObservableObject {
             }
             activity = nil
             confirming = false
-            if r.ok {
+            if case .saveActions(let list) = action {
+                if r.ok {
+                    // ridgekeyd restarts listening ~0.5 s after a change; read the state after that
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    actionsMessage = list.isEmpty ? "Finger actions off."
+                        : "✓ Saved \(list.count) finger action\(list.count == 1 ? "" : "s")."
+                } else {
+                    actionsMessage = r.error == "cancelled" ? "Not saved." : "✗ " + explain(r)
+                }
+            } else if r.ok {
                 fingerprintsMessage = op == "enroll" ? "✓ Enrolled \(label)." : "✓ Deleted \(label)."
             } else if r.error == "cancelled" {
                 fingerprintsMessage = "Cancelled."
@@ -243,6 +257,8 @@ final class AppModel: ObservableObject {
             confirming = false
             if case .delete = activity {
                 enrollMessage = "Confirmed. Deleting…"
+            } else if case .saveActions = activity {
+                enrollMessage = "Confirmed. Saving…"
             } else {
                 enrollMessage = "Confirmed. Now touch the sensor with your \(RK.label(enrollFinger).lowercased()) finger."
             }
@@ -283,23 +299,18 @@ final class AppModel: ObservableObject {
         listening = s.reachable && s.bool("listening")
     }
 
-    func saveActions(_ list: [FingerAction]) async {
-        let rules: [Any] = list.map { a in
+    /// Saving finger actions is confirmed like enroll (an enrolled finger or the password).
+    func saveActions(_ list: [FingerAction]) {
+        actionsMessage = ""
+        request(.saveActions(list))
+    }
+
+    static func rulesPayload(_ list: [FingerAction]) -> [Any] {
+        list.map { a in
             ["finger": a.finger, "gesture": a.hold ? "hold" : "tap", "seconds": a.hold ? a.seconds : 0,
              "taps": a.hold ? 1 : a.taps,
              "action": a.action, "shortcut": a.action == "shortcut" ? a.shortcut : ""] as [String: Any]
         }
-        let r = await RKClient.call(["op": "actions-set", "actions": rules])
-        // ridgekeyd restarts listening ~0.5 s after a change; read the state after that
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
-        if r.ok {
-            actionsMessage = list.isEmpty ? "Finger actions off." : "✓ Saved \(list.count) finger action\(list.count == 1 ? "" : "s")."
-        } else if r.error == "untrusted-client" {
-            actionsMessage = "✗ Only the installed RidgeKey app may change this - reinstall RidgeKey."
-        } else {
-            actionsMessage = "✗ \(r.message)"
-        }
-        await refresh()
     }
 
     // MARK: lock-screen password

@@ -53,6 +53,7 @@ usage (FILE *f)
     "                          e.g. action add left-index tap lock\n"
     "                               action add right-thumb hold 2 shortcut \"Work mode\"\n"
     "  action remove FINGER [tap|double|triple|hold]   action clear\n"
+    "                          (changes are confirmed like enroll: --finger / --password / --stdin)\n"
     "  authorize [RIGHT]       test the admin-dialog path: on-screen prompt + an admin's finger\n"
     "                          (root only; the password is never printed)\n"
     "\n"
@@ -253,12 +254,30 @@ print_rule (xpc_object_t d)
 }
 
 static int
-actions_cmd (const char *user, int argc, char **argv)
+actions_cmd (const char *user, int argc_in, char **argv_in)
 {
   xpc_connection_t c = xpc_connection_create_mach_service (RK_SERVICE_NAME, NULL, XPC_CONNECTION_MACH_SERVICE_PRIVILEGED);
   xpc_object_t q, r, rules, out;
-  const char *sub = argc > 0 ? argv[0] : "list";
+  char *argv[16];
+  int argc = 0, want_password = 0, want_finger = 0, from_stdin = 0, k;
+  const char *sub;
   size_t i, n;
+  char password[1024] = "";
+
+  /* confirmation flags may appear anywhere */
+  for (k = 0; k < argc_in && argc < 15; k++)
+    {
+      if (strcmp (argv_in[k], "--password") == 0)
+        want_password = 1;
+      else if (strcmp (argv_in[k], "--finger") == 0)
+        want_finger = 1;
+      else if (strcmp (argv_in[k], "--stdin") == 0)
+        from_stdin = 1;
+      else
+        argv[argc++] = argv_in[k];
+    }
+  argv[argc] = NULL;
+  sub = argc > 0 ? argv[0] : "list";
 
   xpc_connection_set_event_handler (c, ^(xpc_object_t ev) { (void) ev; });
   xpc_connection_resume (c);
@@ -357,6 +376,57 @@ actions_cmd (const char *user, int argc, char **argv)
   if (user)
     xpc_dictionary_set_string (q, RK_KEY_USER, user);
   xpc_dictionary_set_value (q, RK_KEY_ACTIONS, out);
+
+  /* changing finger actions needs the same confirmation as enroll (root: none) */
+  if (geteuid () != 0)
+    {
+      int has_fingers = 0;
+
+      if (!want_password && !want_finger)
+        {
+          xpc_object_t lq = xpc_dictionary_create (NULL, NULL, 0), la;
+
+          xpc_dictionary_set_string (lq, RK_KEY_OP, RK_OP_LIST);
+          la = xpc_connection_send_message_with_reply_sync (c, lq);
+          if (xpc_get_type (la) == XPC_TYPE_DICTIONARY && xpc_dictionary_get_bool (la, RK_KEY_OK))
+            {
+              xpc_object_t arr = xpc_dictionary_get_value (la, RK_KEY_FINGERS);
+              has_fingers = arr && xpc_array_get_count (arr) > 0;
+            }
+          xpc_release (la);
+          xpc_release (lq);
+        }
+      if (want_finger || (!want_password && has_fingers))
+        {
+          xpc_dictionary_set_string (q, RK_KEY_AUTH, "finger");
+          printf ("Confirm it is you: touch one of your enrolled fingers...\n");
+          fflush (stdout);
+        }
+      else
+        {
+          xpc_dictionary_set_string (q, RK_KEY_AUTH, "password");
+          if (from_stdin)
+            {
+              size_t len;
+
+              if (!fgets (password, sizeof password, stdin))
+                password[0] = '\0';
+              len = strlen (password);
+              if (len && password[len - 1] == '\n')
+                password[len - 1] = '\0';
+            }
+          else if (!readpassphrase ("Confirm with your login password: ", password, sizeof password,
+                                    RPP_ECHO_OFF | RPP_REQUIRE_TTY))
+            password[0] = '\0';
+          if (!*password)
+            {
+              fprintf (stderr, "no password entered\n");
+              return 2;
+            }
+          xpc_dictionary_set_string (q, RK_KEY_PASSWORD, password);
+          memset_s (password, sizeof password, 0, sizeof password);
+        }
+    }
   call_sync (c, q);
   printf ("Saved. Your finger actions:\n");
   for (i = 0; i < xpc_array_get_count (out); i++)
