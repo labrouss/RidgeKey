@@ -46,28 +46,46 @@ create_identity() {
   tmp="$TMPD"
   chmod 700 "$tmp"
 
-  cat > "$tmp/req.cnf" <<EOF
-[req]
-distinguished_name = dn
-prompt             = no
-x509_extensions    = ext
-[dn]
-CN = $CN ($(scutil --get LocalHostName 2>/dev/null || hostname -s))
-[ext]
-basicConstraints     = critical,CA:false
-keyUsage             = critical,digitalSignature
-extendedKeyUsage     = critical,codeSigning
-subjectKeyIdentifier = hash
-EOF
-  /usr/bin/openssl req -x509 -newkey rsa:3072 -nodes -days 7300 -sha256 \
-    -config "$tmp/req.cnf" -keyout "$tmp/key.pem" -out "$tmp/cert.pem" >/dev/null 2>&1 \
-    || die "openssl could not create the certificate"
+  local host
+  host="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
+  write_cnf() {   # $1 = full | minimal
+    {
+      echo "[req]"
+      echo "distinguished_name = dn"
+      echo "prompt = no"
+      echo "x509_extensions = ext"
+      echo "[dn]"
+      echo "CN = $CN - $host"
+      echo "[ext]"
+      if [ "$1" = full ]; then
+        echo "basicConstraints = critical,CA:FALSE"
+        echo "keyUsage = critical,digitalSignature"
+        echo "extendedKeyUsage = critical,codeSigning"
+        echo "subjectKeyIdentifier = hash"
+      else
+        echo "keyUsage = digitalSignature"
+        echo "extendedKeyUsage = codeSigning"
+      fi
+    } > "$tmp/req.cnf"
+  }
+  make_cert() {   # $1 = validity in days
+    /usr/bin/openssl req -x509 -newkey rsa:3072 -nodes -days "$1" -sha256 \
+      -config "$tmp/req.cnf" -keyout "$tmp/key.pem" -out "$tmp/cert.pem" > "$tmp/openssl.log" 2>&1
+  }
+  write_cnf full
+  if ! make_cert 7300; then
+    echo "    openssl ($(/usr/bin/openssl version 2>/dev/null)) refused the full settings:"
+    sed 's/^/      /' "$tmp/openssl.log" | head -8
+    echo "    retrying with minimal code-signing settings"
+    write_cnf minimal
+    make_cert 3650 || { sed 's/^/      /' "$tmp/openssl.log" | head -8; die "openssl could not create the certificate"; }
+  fi
   # 3DES/SHA1 PKCS#12: the format macOS `security import` reliably reads (LibreSSL's default;
   # OpenSSL 3 would otherwise use AES/PBES2)
   /usr/bin/openssl pkcs12 -export -inkey "$tmp/key.pem" -in "$tmp/cert.pem" \
     -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
-    -name "$CN" -out "$tmp/id.p12" -passout pass:ridgekey >/dev/null 2>&1 \
-    || die "openssl could not package the certificate"
+    -name "$CN" -out "$tmp/id.p12" -passout pass:ridgekey > "$tmp/openssl.log" 2>&1 \
+    || { sed 's/^/      /' "$tmp/openssl.log" | head -8; die "openssl could not package the certificate"; }
 
   pw="$(/usr/bin/openssl rand -hex 32)"
   ( umask 077; printf '%s' "$pw" > "$PWF" )
