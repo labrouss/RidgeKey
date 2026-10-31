@@ -79,7 +79,8 @@
 #define RK_KEY_SCREEN_LOCKED   "screen-locked"
 #define RK_KEY_RIGHT           "right"    /* authorize: the authorization right being requested */
 #define RK_KEY_CLIENT          "client"   /* authorize: path of the app asking for it */
-#define RK_KEY_CLIENT_PID      "client-pid" /* authorize: pid of that app (0 = unknown) */
+#define RK_KEY_CLIENT_PID      "client-pid" /* authorize: pid of that app = authd's creator-pid (0 = unknown) */
+#define RK_KEY_CALLER_PID      "caller-pid" /* authorize: process that submitted the request (log only) */
 #define RK_KEY_REUSED          "reused"   /* authorize reply: approved from a recent touch */
 
 /* operations */

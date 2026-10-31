@@ -1052,7 +1052,8 @@ do_authorize (Request *r)
   {
     gint64 pid = xpc_dictionary_get_int64 (r->msg, RK_KEY_CLIENT_PID);
 
-    g_message ("authorize: %s requested by %s (pid %lld)", right ?: "?", client ?: "?", (long long) pid);
+    g_message ("authorize: %s requested by %s (pid %lld, submitted by pid %lld)", right ?: "?", client ?: "?",
+               (long long) pid, (long long) xpc_dictionary_get_int64 (r->msg, RK_KEY_CALLER_PID));
     if (reuse_matches (client, pid, cs.uid))
       {
         g_autoptr(GError) err = NULL;
