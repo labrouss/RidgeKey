@@ -22,6 +22,7 @@
  * fallback would not run). System libraries only. No allocation-heavy work, no UI.
  */
 #include <dispatch/dispatch.h>
+#include <dlfcn.h>
 #include <os/log.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -287,9 +288,14 @@ AuthorizationPluginCreate (const AuthorizationCallbacks *callbacks, Authorizatio
                            const AuthorizationPluginInterface **interface)
 {
   Plugin *p = calloc (1, sizeof *p);
+  Dl_info info;
 
   if (!p)
     return errAuthorizationInternal;
+  /* XPC may run our connection handler blocks after a request ends; never let the host unload
+   * this code while that can happen. */
+  if (dladdr ((const void *) AuthorizationPluginCreate, &info) && info.dli_fname)
+    (void) dlopen (info.dli_fname, RTLD_LAZY | RTLD_NOLOAD | RTLD_NODELETE);
   rk_log = os_log_create ("io.github.labrouss.ridgekey", "authplugin");
   p->callbacks = callbacks;
   *plugin = p;

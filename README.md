@@ -6,8 +6,9 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 [libfprint](https://fprint.freedesktop.org/). The first target is the **Synaptics Prometheus
 06cb:00f0** in the HP EliteBook 840 G8 (macOS Tahoe, Intel).
 
-> **Status:** working on the HP EliteBook 840 G8 (macOS Tahoe, 2026-10-31): enroll, `sudo` and
-> the lock screen (display on or asleep) unlock with a fingerprint. Early, but usable.
+> **Status:** working on the HP EliteBook 840 G8 (macOS Tahoe, 2026-10-31): enroll, `sudo`, the
+> lock screen (display on or asleep) and admin dialogs (System Settings locks, installers) all
+> accept a fingerprint, with the password as fallback. Early, but usable.
 
 > **Safety:** this sensor shares one print database with Windows Hello and the HP BIOS.
 > RidgeKey **never** sends `BMKT_CMD_DEL_FULL_DB` (0x84), and every build removes that code path
@@ -25,7 +26,7 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 | 4b | Lock screen: `ridgekey-agent` types the stored password into Apple's own lock screen after a match ([docs](docs/ridgekeyd.md#lock-screen-unlock)) | ✅ 0.4.3 tested: display on and asleep |
 | 4d | **RidgeKey.app** (SwiftUI): status, enroll/delete with progress, lock-screen password, sudo toggle | ✅ 0.6.0 tested on the 840 G8 |
 | 4e | Stable local code signature, so Accessibility survives upgrades (`ridgekey-sign`) | ✅ 0.6.0: confirmed on the 840 G8 (reinstalls keep the certificate and the Accessibility grant) |
-| 4f | Admin password dialogs by fingerprint: `RidgeKey.bundle` authorization plugin + `ridgekey-admin` ([docs](docs/ridgekeyd.md#fingerprint-for-admin-dialogs)) | 🔧 0.7.0 first version |
+| 4f | Admin password dialogs by fingerprint: `RidgeKey.bundle` authorization plugin + `ridgekey-admin` ([docs](docs/ridgekeyd.md#fingerprint-for-admin-dialogs)) | ✅ 0.7.0 tested on the 840 G8: Users & Groups unlocks with one touch (follow-ups reuse it), Use Password falls back |
 
 Why not an Authorization plugin for the lock screen? Since macOS 14 the lock screen uses its own
 modern UI. Getting a plugin to run there means reverting `system.login.screensaver` to the legacy

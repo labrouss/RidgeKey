@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -139,11 +140,29 @@ is_remote_session (pam_handle_t *pamh)
 
 /* ------------------------------------------------------------------------------------------ */
 
+/* XPC delivers the connection's final "invalid" event asynchronously, on our queue, after
+ * xpc_connection_cancel(). The handler's code lives in this module, and OpenPAM dlclose()s the
+ * module in pam_end() - if the event arrives after that, the process (sudo!) jumps into
+ * unmapped memory (seen in CI: exit 139). Pin the module so it is never unloaded. */
+static void
+pin_module (void)
+{
+  static dispatch_once_t once;
+
+  dispatch_once (&once, ^{
+    Dl_info info;
+
+    if (dladdr ((const void *) pin_module, &info) && info.dli_fname)
+      (void) dlopen (info.dli_fname, RTLD_LAZY | RTLD_NOLOAD | RTLD_NODELETE);
+  });
+}
+
 /* Heap-allocated so the XPC and signal handler blocks can share it by pointer. */
 typedef struct {
   xpc_connection_t     conn;
   dispatch_queue_t     queue;
   dispatch_semaphore_t done;
+  dispatch_semaphore_t closed;         /* signalled by the connection's final invalid event */
   xpc_object_t         reply;          /* retained, set by the reply handler */
   volatile int         interrupted;    /* Ctrl-C seen */
   int                  handler_pending;/* a reply handler may still run - do not free */
@@ -201,11 +220,24 @@ verify_loop (pam_handle_t *pamh, const Options *o, const char *user)
 
   if (!s)
     return PAM_IGNORE;
+  pin_module ();
   s->queue = dispatch_queue_create ("io.github.labrouss.ridgekey.pam", DISPATCH_QUEUE_SERIAL);
   s->done = dispatch_semaphore_create (0);
+  s->closed = dispatch_semaphore_create (0);
   s->conn = xpc_connection_create_mach_service (RK_SERVICE_NAME, s->queue,
                                                 XPC_CONNECTION_MACH_SERVICE_PRIVILEGED);
-  xpc_connection_set_event_handler (s->conn, ^(xpc_object_t ev) { (void) ev; });
+  {
+    dispatch_semaphore_t closed = s->closed;   /* the block's own reference, released on invalid */
+
+    dispatch_retain (closed);
+    xpc_connection_set_event_handler (s->conn, ^(xpc_object_t ev) {
+      if (ev == XPC_ERROR_CONNECTION_INVALID)
+        {
+          dispatch_semaphore_signal (closed);
+          dispatch_release (closed);
+        }
+    });
+  }
   xpc_connection_resume (s->conn);
 
   /* Ctrl-C while waiting for a finger: cancel and fall back to the password. */
@@ -287,12 +319,15 @@ verify_loop (pam_handle_t *pamh, const Options *o, const char *user)
     result = PAM_IGNORE;
 
   xpc_connection_cancel (s->conn);
+  /* Let the final event arrive while we are still here (the module is pinned regardless). */
+  dispatch_semaphore_wait (s->closed, dispatch_time (DISPATCH_TIME_NOW, 2 * (int64_t) NSEC_PER_SEC));
   if (!s->handler_pending)
     {
       /* Nothing outstanding: safe to free. (Otherwise leak the few bytes rather than risk a
        * late reply handler writing to freed memory inside sudo.) */
       xpc_release (s->conn);
       dispatch_release (s->done);
+      dispatch_release (s->closed);
       dispatch_release (s->queue);
       free (s);
     }
