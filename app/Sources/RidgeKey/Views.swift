@@ -19,6 +19,18 @@ enum Pane: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The documentation page for this pane.
+    var helpPage: String {
+        switch self {
+        case .overview, .about: return ""
+        case .fingerprints: return "fingerprints"
+        case .actions: return "finger-actions"
+        case .lockScreen: return "lock-screen"
+        case .admin: return "admin-dialogs"
+        case .sudo: return "sudo"
+        }
+    }
+
     var icon: String {
         switch self {
         case .overview: return "gauge"
@@ -65,6 +77,14 @@ struct ContentView: View {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .disabled(model.refreshing)
+            }
+            ToolbarItem {
+                Button {
+                    NSWorkspace.shared.open(RK.docs((selection ?? .overview).helpPage))
+                } label: {
+                    Label("Help", systemImage: "questionmark.circle")
+                }
+                .help("Open the documentation for this page")
             }
         }
         .task { await model.refresh() }
@@ -509,7 +529,10 @@ struct AboutView: View {
             Section {
                 LabeledContent("RidgeKey app", value: appVersion)
                 LabeledContent("ridgekeyd", value: model.reachable ? model.version : "not running")
-                Link("github.com/labrouss/RidgeKey", destination: URL(string: "https://github.com/labrouss/RidgeKey")!)
+                Link("Documentation", destination: RK.docs)
+                Link("Troubleshooting", destination: RK.docs("troubleshooting"))
+                Link("Report an issue", destination: RK.newIssue)
+                Link("github.com/labrouss/RidgeKey", destination: RK.repo)
             }
             Section {
                 Text("Fingerprint unlock for macOS on laptops with match-on-chip readers (Synaptics, "

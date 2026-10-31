@@ -1,3 +1,8 @@
+---
+title: Synaptics 00f0 protocol notes
+nav_order: 10
+---
+
 # Synaptics Prometheus (06cb:00f0) USB / BMKT protocol - observed
 
 Source: Linux capture 2026-10-30 (HP EliteBook 840 G8, Ubuntu 26.04 live, libfprint 1.95.1+tod1,

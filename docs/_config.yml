@@ -1,0 +1,22 @@
+# GitHub Pages: Settings -> Pages -> Deploy from a branch -> main, /docs
+title: RidgeKey
+description: Fingerprint authentication for macOS on laptops with match-on-chip readers
+remote_theme: just-the-docs/just-the-docs@v0.10.1
+plugins:
+  - jekyll-remote-theme
+color_scheme: dark
+logo: /assets/ridgekey-logo.png
+favicon_ico: /assets/ridgekey-icon.png
+search_enabled: true
+heading_anchors: true
+aux_links:
+  "RidgeKey on GitHub": https://github.com/labrouss/RidgeKey
+aux_links_new_tab: true
+gh_edit_link: true
+gh_edit_repository: https://github.com/labrouss/RidgeKey
+gh_edit_branch: main
+gh_edit_source: docs
+gh_edit_view_mode: tree
+footer_content: "RidgeKey is MIT licensed; libfprint, GLib, gusb and libusb are LGPL. Not affiliated with Apple, Synaptics, HP or the libfprint project."
+exclude:
+  - milestone-1-results.md

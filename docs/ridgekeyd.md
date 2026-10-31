@@ -1,3 +1,8 @@
+---
+title: Technical reference
+nav_order: 9
+---
+
 # ridgekeyd, ridgekeyctl and sudo
 
 `ridgekeyd` is a root launchd daemon that owns the fingerprint sensor. Clients talk to it over

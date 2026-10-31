@@ -1,5 +1,6 @@
 // RidgeKey - entry point.
 // SPDX-License-Identifier: MIT
+import AppKit
 import SwiftUI
 
 struct RidgeKeyApp: App {
@@ -12,6 +13,17 @@ struct RidgeKeyApp: App {
                 .frame(minWidth: 720, minHeight: 480)
         }
         .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(replacing: .help) {
+                Button("RidgeKey Help") { NSWorkspace.shared.open(RK.docs) }
+                    .keyboardShortcut("?", modifiers: .command)
+                Button("Install & Upgrade") { NSWorkspace.shared.open(RK.docs("install")) }
+                Button("Troubleshooting") { NSWorkspace.shared.open(RK.docs("troubleshooting")) }
+                Divider()
+                Button("Report an Issue…") { NSWorkspace.shared.open(RK.newIssue) }
+                Button("RidgeKey on GitHub") { NSWorkspace.shared.open(RK.repo) }
+            }
+        }
     }
 }
 

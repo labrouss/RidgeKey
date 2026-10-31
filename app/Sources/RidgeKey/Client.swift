@@ -8,6 +8,13 @@ enum RK {
     static let agentPath = "/usr/local/ridgekey/RidgeKeyAgent.app"
     static let sudoTool = "/usr/local/ridgekey/bin/ridgekey-sudo"
     static let adminTool = "/usr/local/ridgekey/bin/ridgekey-admin"
+    // documentation (GitHub Pages, built from docs/)
+    static let docs = URL(string: "https://labrouss.github.io/RidgeKey/")!
+    static let repo = URL(string: "https://github.com/labrouss/RidgeKey")!
+    static let newIssue = URL(string: "https://github.com/labrouss/RidgeKey/issues/new")!
+    static func docs(_ page: String) -> URL {
+        page.isEmpty ? docs : docs.appendingPathComponent(page + ".html")
+    }
     static let fingerprintRule = "io.github.labrouss.ridgekey.fingerprint"
 
     static let fingers = [

@@ -10,6 +10,8 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 > lock screen (display on or asleep) and admin dialogs (System Settings locks, installers) all
 > accept a fingerprint, with the password as fallback. Early, but usable.
 
+> **Documentation:** <https://labrouss.github.io/RidgeKey/> - install, every feature, troubleshooting.
+
 > **Safety:** this sensor shares one print database with Windows Hello and the HP BIOS.
 > RidgeKey **never** sends `BMKT_CMD_DEL_FULL_DB` (0x84), and every build removes that code path
 > (see `patches/libfprint/`). It only deletes prints it created itself.
