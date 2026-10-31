@@ -21,6 +21,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <security/pam_appl.h>
 #include <security/pam_modules.h>
@@ -36,7 +38,7 @@ typedef struct {
   long tries;
   int  allow_remote;
   int  debug;
-  int  silent;
+  int  nocue;      /* no "Touch the sensor" lines at all */
   int  noop;
 } Options;
 
@@ -49,7 +51,9 @@ parse_options (Options *o, int flags, int argc, const char **argv)
   o->tries = 3;
   o->allow_remote = 0;
   o->debug = 0;
-  o->silent = (flags & PAM_SILENT) != 0;
+  /* PAM_SILENT is ignored on purpose: sudo sets it by default (sudoers pam_silent), and
+   * without the cue the terminal just seems to hang while the sensor waits. */
+  o->nocue = 0;
   o->noop = 0;
   for (i = 0; i < argc; i++)
     {
@@ -63,6 +67,8 @@ parse_options (Options *o, int flags, int argc, const char **argv)
         o->debug = 1;
       else if (strcmp (argv[i], "noop") == 0)
         o->noop = 1;
+      else if (strcmp (argv[i], "nocue") == 0)
+        o->nocue = 1;
       else
         syslog (LOG_AUTHPRIV | LOG_WARNING, "pam_ridgekey: unknown option '%s'", argv[i]);
     }
@@ -84,7 +90,8 @@ dbg (const Options *o, const char *fmt, ...)
   va_end (ap);
 }
 
-/* Show a line to the user through the application's conversation function. */
+/* Show a line to the user: on the controlling terminal when there is one (sudo), otherwise
+ * through the application's conversation function. */
 static void
 say (pam_handle_t *pamh, const Options *o, const char *msg)
 {
@@ -93,8 +100,18 @@ say (pam_handle_t *pamh, const Options *o, const char *msg)
   struct pam_message m;
   const struct pam_message *mp = &m;
   struct pam_response *resp = NULL;
+  int tty;
 
-  if (o->silent || pam_get_item (pamh, PAM_CONV, &item) != PAM_SUCCESS || !item)
+  if (o->nocue)
+    return;
+  tty = open ("/dev/tty", O_WRONLY | O_NOCTTY | O_CLOEXEC);
+  if (tty >= 0)
+    {
+      dprintf (tty, "%s\n", msg);
+      close (tty);
+      return;
+    }
+  if (pam_get_item (pamh, PAM_CONV, &item) != PAM_SUCCESS || !item)
     return;
   conv = item;
   if (!conv->conv)

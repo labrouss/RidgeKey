@@ -140,7 +140,9 @@ auth       sufficient     /usr/local/ridgekey/lib/pam/pam_ridgekey.so
 | SSH session | password only. Otherwise whoever is at the laptop could approve a remote `sudo` with a touch. Add `allow_remote` to the line to override. |
 
 Module options (append to the line): `timeout=N` (seconds per try, default 10), `tries=N`
-(default 3), `allow_remote`, `debug` (logs to the system log).
+(default 3), `allow_remote`, `debug` (logs to the system log), `nocue` (no "Touch the
+fingerprint sensor" line - by default it is written to the terminal even though sudo asks PAM
+modules to be silent).
 
 **Safety:**
 - Before editing, `ridgekey-sudo` checks that the module and every folder above it are owned by
