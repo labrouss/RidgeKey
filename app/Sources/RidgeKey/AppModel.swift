@@ -47,6 +47,7 @@ final class AppModel: ObservableObject {
         }
     }
     @Published var actions: [FingerAction] = []
+    @Published var shortcutNames: [String] = []    // from the Shortcuts app (shortcuts list)
     @Published var listening = false
     @Published var actionsMessage = ""
 
@@ -256,6 +257,32 @@ final class AppModel: ObservableObject {
 
     // MARK: finger actions
 
+    /// The user's Shortcuts, as the Shortcuts app lists them (`shortcuts list`).
+    func loadShortcuts() async {
+        let names: [String] = await Task.detached {
+            let p = Process()
+            let pipe = Pipe()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
+            p.arguments = ["list"]
+            p.standardOutput = pipe
+            p.standardError = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return [] }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self)
+                .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        }.value
+        shortcutNames = names
+    }
+
+    /// Cheap status poll for the Finger Actions pane (listening starts/stops on its own).
+    func refreshListening() async {
+        let s = await RKClient.call(["op": "status"])
+        listening = s.reachable && s.bool("listening")
+    }
+
     func saveActions(_ list: [FingerAction]) async {
         let rules: [Any] = list.map { a in
             ["finger": a.finger, "gesture": a.hold ? "hold" : "tap", "seconds": a.hold ? a.seconds : 0,
@@ -263,6 +290,8 @@ final class AppModel: ObservableObject {
              "action": a.action, "shortcut": a.action == "shortcut" ? a.shortcut : ""] as [String: Any]
         }
         let r = await RKClient.call(["op": "actions-set", "actions": rules])
+        // ridgekeyd restarts listening ~0.5 s after a change; read the state after that
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
         if r.ok {
             actionsMessage = list.isEmpty ? "Finger actions off." : "✓ Saved \(list.count) finger action\(list.count == 1 ? "" : "s")."
         } else if r.error == "untrusted-client" {

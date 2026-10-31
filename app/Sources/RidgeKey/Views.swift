@@ -388,7 +388,29 @@ struct ActionsView: View {
                             }
                             .labelsHidden().frame(width: 170)
                             if a.action == "shortcut" {
-                                TextField("Shortcut name", text: $a.shortcut)
+                                if model.shortcutNames.isEmpty {
+                                    TextField("Shortcut name", text: $a.shortcut)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(minWidth: 180)
+                                } else {
+                                    Picker("", selection: $a.shortcut) {
+                                        Text("Choose a Shortcut…").tag("")
+                                        // keep a saved name visible even if it was renamed/deleted since
+                                        if !a.shortcut.isEmpty && !model.shortcutNames.contains(a.shortcut) {
+                                            Text("\(a.shortcut) (not found)").tag(a.shortcut)
+                                        }
+                                        ForEach(model.shortcutNames, id: \.self) { Text($0).tag($0) }
+                                    }
+                                    .labelsHidden()
+                                    .frame(minWidth: 200)
+                                }
+                                Button {
+                                    Task { await model.loadShortcuts() }
+                                } label: {
+                                    Image(systemName: "arrow.clockwise")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Reload the list from the Shortcuts app")
                             }
                         }
                     }
@@ -423,6 +445,14 @@ struct ActionsView: View {
             }
         }
         .onAppear { if !loaded { draft = model.actions; loaded = true } }
+        .task { await model.loadShortcuts() }
+        .task {
+            // keep "Listening" current while this pane is open (stops when it closes)
+            while !Task.isCancelled {
+                await model.refreshListening()
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+        }
         .onChange(of: model.actions) { new in if draft.isEmpty || !loaded { draft = new } }
     }
 }
