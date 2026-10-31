@@ -39,6 +39,7 @@
 /* Hint / context keys used by authd (AuthorizationTagsPriv.h). */
 #define HINT_RIGHT        "authorize-right"
 #define HINT_CLIENT_PATH  "client-path"
+#define HINT_CLIENT_PID   "client-pid"
 #define CTX_USERNAME      kAuthorizationEnvironmentUsername   /* "username" */
 #define CTX_PASSWORD      kAuthorizationEnvironmentPassword   /* "password" */
 
@@ -86,9 +87,33 @@ set_result (Mechanism *m, AuthorizationResult result)
   m->plugin->callbacks->SetResult (m->engine, result);
 }
 
+/* authd stores the pid as a native int. Returns 0 when missing. */
+static int64_t
+get_hint_pid (Mechanism *m)
+{
+  const AuthorizationValue *v = NULL;
+  int32_t pid32;
+
+  if (m->plugin->callbacks->GetHintValue (m->engine, HINT_CLIENT_PID, &v) != errAuthorizationSuccess ||
+      !v || !v->data)
+    return 0;
+  if (v->length == sizeof (int32_t))
+    {
+      memcpy (&pid32, v->data, sizeof pid32);
+      return pid32 > 0 ? pid32 : 0;
+    }
+  if (v->length == sizeof (int64_t))
+    {
+      int64_t pid64;
+      memcpy (&pid64, v->data, sizeof pid64);
+      return pid64 > 0 ? pid64 : 0;
+    }
+  return 0;
+}
+
 /* Ask ridgekeyd. Returns a retained reply dictionary, or NULL. Never blocks forever. */
 static xpc_object_t
-ask_daemon (const char *right, const char *client)
+ask_daemon (const char *right, const char *client, int64_t pid)
 {
   xpc_connection_t conn;
   xpc_object_t msg;
@@ -104,6 +129,7 @@ ask_daemon (const char *right, const char *client)
   xpc_dictionary_set_string (msg, RK_KEY_OP, RK_OP_AUTHORIZE);
   xpc_dictionary_set_string (msg, RK_KEY_RIGHT, right ? right : "");
   xpc_dictionary_set_string (msg, RK_KEY_CLIENT, client ? client : "");
+  xpc_dictionary_set_int64 (msg, RK_KEY_CLIENT_PID, pid);
   xpc_dictionary_set_int64 (msg, RK_KEY_TIMEOUT, RK_AUTH_TIMEOUT);
 
   xpc_connection_send_message_with_reply (conn, msg, q, ^(xpc_object_t r) {
@@ -147,7 +173,7 @@ run_fingerprint (Mechanism *m)
   char right[256], client[1024];
   const char *r = get_hint (m, HINT_RIGHT, right, sizeof right);
   const char *c = get_hint (m, HINT_CLIENT_PATH, client, sizeof client);
-  xpc_object_t reply = ask_daemon (r, c);
+  xpc_object_t reply = ask_daemon (r, c, get_hint_pid (m));
   AuthorizationResult result = kAuthorizationResultDeny;
 
   if (!reply)

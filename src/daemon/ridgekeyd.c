@@ -43,6 +43,10 @@
 #define RK_TIMEOUT_DELETE       60
 #define RK_TIMEOUT_AUTHORIZE    20     /* admin dialogs: then the password dialog appears */
 #define RK_AUTHORIZE_MISSES     3      /* wrong fingers allowed before falling back */
+/* One click on a lock makes an app ask for several rights within seconds (seen: Users & Groups
+ * asks 4 times). After a touch, the SAME process gets those follow-ups without another touch. */
+#define RK_REUSE_SECONDS        15
+#define RK_REUSE_MAX            6
 
 /* ------------------------------------------------------------------------------------------ */
 /* Requests                                                                                    */
@@ -139,6 +143,8 @@ typedef struct {
 
   Prompt       *prompt;         /* authorize: the on-screen notice */
   char         *right;          /* authorize: right being requested (for the log) */
+  char         *client;         /* authorize: requesting app's path */
+  gint64        client_pid;     /* authorize: requesting app's pid (0 = unknown) */
   gint          misses;         /* authorize: fingers that matched nobody */
 
   GError       *error;          /* final error, if any */
@@ -198,6 +204,7 @@ op_free (Op *op)
     xpc_release (op->reply);
   prompt_close (op->prompt);
   g_free (op->right);
+  g_free (op->client);
   g_free (op->username);
   request_free (op->req);
   g_free (op);
@@ -213,6 +220,8 @@ op_complete (Op *op)
 
       if (g_error_matches (op->error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_DATA_FULL))
         msg = "the sensor's storage is full - remove prints in Windows Hello / BIOS or old RidgeKey prints";
+      if (op->kind == OP_AUTHORIZE && strcmp (code, RK_ERR_CANCELLED) == 0)
+        msg = "Use Password chosen - macOS shows its password dialog instead";
       xpc_dictionary_set_bool (op->reply, RK_KEY_OK, false);
       xpc_dictionary_set_string (op->reply, RK_KEY_ERROR, code);
       xpc_dictionary_set_string (op->reply, RK_KEY_MESSAGE, msg);
@@ -439,6 +448,48 @@ user_is_admin (uid_t uid)
   return mbr_check_membership (uu, gu, &member) == 0 && member;
 }
 
+/* The last fingerprint approval, for follow-up requests from the same process. */
+static struct {
+  char   *user;
+  char   *client;
+  gint64  pid;
+  uid_t   console;
+  gint64  when;     /* g_get_monotonic_time() of the touch */
+  gint    uses;
+} reuse;
+
+static void
+reuse_clear (const char *why)
+{
+  if (reuse.user && why)
+    g_message ("authorize: forgetting the last approval (%s)", why);
+  g_clear_pointer (&reuse.user, g_free);
+  g_clear_pointer (&reuse.client, g_free);
+  reuse.when = 0;
+  reuse.uses = 0;
+}
+
+static void
+reuse_remember (const char *user, const char *client, gint64 pid, uid_t console)
+{
+  reuse_clear (NULL);
+  if (!client || !*client || pid <= 0)
+    return;                       /* cannot tell the follow-ups apart from anyone else */
+  reuse.user = g_strdup (user);
+  reuse.client = g_strdup (client);
+  reuse.pid = pid;
+  reuse.console = console;
+  reuse.when = g_get_monotonic_time ();
+}
+
+static gboolean
+reuse_matches (const char *client, gint64 pid, uid_t console)
+{
+  return reuse.user && client && pid > 0 && pid == reuse.pid && console == reuse.console &&
+         strcmp (client, reuse.client) == 0 && reuse.uses < RK_REUSE_MAX &&
+         g_get_monotonic_time () - reuse.when <= (gint64) RK_REUSE_SECONDS * G_USEC_PER_SEC;
+}
+
 /* authorize: the finger matched uid - hand over that admin's password for macOS to verify. */
 static void
 release_admin_password (Op *op, uid_t uid)
@@ -475,6 +526,7 @@ release_admin_password (Op *op, uid_t uid)
   secret_free (pw);
   g_message ("authorize: fingerprint matched admin %s for %s - password released to the plugin",
              op->username, op->right ?: "?");
+  reuse_remember (op->username, op->client, op->client_pid, console_get_state ().uid);
   op_finish (op, NULL);
 }
 
@@ -778,6 +830,8 @@ start_op (Request *r, OpKind kind)
             return NULL;
           }
         op->right = g_strdup (xpc_dictionary_get_string (r->msg, RK_KEY_RIGHT) ?: "?");
+        op->client = g_strdup (xpc_dictionary_get_string (r->msg, RK_KEY_CLIENT));
+        op->client_pid = xpc_dictionary_get_int64 (r->msg, RK_KEY_CLIENT_PID);
         timeout = (t > 0) ? (guint) MIN (t, RK_TIMEOUT_MATCH_MAX) : RK_TIMEOUT_AUTHORIZE;
         break;
       }
@@ -995,7 +1049,39 @@ do_authorize (Request *r)
       request_free (r);
       return;
     }
-  g_message ("authorize: %s requested by %s", right ?: "?", client ?: "?");
+  {
+    gint64 pid = xpc_dictionary_get_int64 (r->msg, RK_KEY_CLIENT_PID);
+
+    g_message ("authorize: %s requested by %s (pid %lld)", right ?: "?", client ?: "?", (long long) pid);
+    if (reuse_matches (client, pid, cs.uid))
+      {
+        g_autoptr(GError) err = NULL;
+        struct passwd *pwd = getpwnam (reuse.user);
+        char *pw = (pwd && user_is_admin (pwd->pw_uid)) ? secret_load (reuse.user, &err) : NULL;
+
+        if (pw && secret_validate (reuse.user, pw, NULL))
+          {
+            xpc_object_t reply = reply_new (r);
+
+            reuse.uses++;
+            xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
+            xpc_dictionary_set_bool (reply, RK_KEY_REUSED, true);
+            xpc_dictionary_set_string (reply, RK_KEY_USER, reuse.user);
+            xpc_dictionary_set_string (reply, RK_KEY_PASSWORD, pw);
+            secret_free (pw);
+            g_message ("authorize: %s approved for %s from the touch %.1fs ago (follow-up %d of %d)",
+                       right ?: "?", reuse.user,
+                       (g_get_monotonic_time () - reuse.when) / (double) G_USEC_PER_SEC,
+                       reuse.uses, RK_REUSE_MAX);
+            reply_send (r, reply);
+            request_free (r);
+            return;
+          }
+        if (pw)
+          secret_free (pw);
+        reuse_clear ("stored password no longer valid");
+      }
+  }
   op = start_op (r, OP_AUTHORIZE);
   if (!op)
     return;
@@ -1189,6 +1275,8 @@ on_console_changed (const ConsoleState *cs, gpointer data)
 {
   struct passwd *pw = cs->uid != RK_NO_CONSOLE_USER ? getpwuid (cs->uid) : NULL;
 
+  if (cs->locked || cs->uid != reuse.console)
+    reuse_clear (cs->locked ? "screen locked" : "console user changed");
   if (cs->uid == RK_NO_CONSOLE_USER)
     g_message ("console: login window");
   else

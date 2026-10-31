@@ -184,8 +184,10 @@ wrap() {   # RIGHT
   # (not in $(...): qualify sets Q_ROOT / Q_ENT for us)
   if ! qualify "$o" > "$TMP/why"; then echo "  -  $name: $(cat "$TMP/why") - skipped"; return 3; fi
 
-  mkdir -p "$STATE"; chmod 700 "$STATE"
-  cp "$o" "$STATE/$name.plist"; chmod 600 "$STATE/$name.plist"
+  # Readable by everyone (status, the app): these are the same public rule definitions that
+  # 'security authorizationdb read' shows to any user. Only root can change them.
+  mkdir -p "$STATE"; chmod 755 "$STATE"
+  cp "$o" "$STATE/$name.plist"; chmod 644 "$STATE/$name.plist"
   write_right "$ORIG$name" "$o" || { rm -f "$STATE/$name.plist"; echo "  !! $name: could not save the original copy - skipped"; return 1; }
 
   cp "$o" "$w"
@@ -269,6 +271,7 @@ cmd_disable() {
 
 cmd_status() {
   local r n=0 live="$TMP/live.plist"
+  [ -d "$STATE" ] && [ ! -r "$STATE" ] && { echo "cannot read $STATE - try: sudo ridgekey-admin status"; return 1; }
   if [ -f "$PLUGIN/Contents/Info.plist" ]; then
     echo "plugin:   $PLUGIN ($(defaults read "$PLUGIN/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo ?))"
   else

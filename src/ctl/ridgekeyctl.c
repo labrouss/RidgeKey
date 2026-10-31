@@ -163,8 +163,9 @@ print_result (const char *op, xpc_object_t reply)
     }
   else if (strcmp (op, RK_OP_AUTHORIZE) == 0)
     {
-      printf ("APPROVED: administrator %s (password released to this process - not shown)\n",
-              xpc_dictionary_get_string (reply, RK_KEY_USER));
+      printf ("APPROVED: administrator %s%s (password released to this process - not shown)\n",
+              xpc_dictionary_get_string (reply, RK_KEY_USER),
+              xpc_dictionary_get_bool (reply, RK_KEY_REUSED) ? ", from the previous touch" : "");
     }
   else if (strcmp (op, RK_OP_PASSWORD_CHECK) == 0)
     {
