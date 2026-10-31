@@ -39,6 +39,7 @@ LIBFPRINT_TAG="${LIBFPRINT_TAG:-v1.94.10}"
 LIBUSB_URL="https://github.com/libusb/libusb/releases/download/v$LIBUSB_VER/libusb-$LIBUSB_VER.tar.bz2"
 PKGCONF_URL="https://github.com/pkgconf/pkgconf.git"
 GLIB_URL="https://gitlab.gnome.org/GNOME/glib.git"
+GLIB_MIRROR="https://github.com/GNOME/glib.git"     # official read-only mirror, same tags
 GUSB_URL="https://github.com/hughsie/libgusb.git"
 LIBFPRINT_URL="https://gitlab.freedesktop.org/libfprint/libfprint.git"
 
@@ -55,12 +56,23 @@ log() { gh_endgroup; printf '\n\033[1;34m==> %s\033[0m\n' "$*"; echo "[$(date +%
 die() { gh_endgroup; [ -n "${GITHUB_ACTIONS:-}" ] && echo "::error::$*"; printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 run() { "$@" >> "$LOG" 2>&1 || { tail -40 "$LOG"; die "failed: $* (full log: $LOG)"; }; }
 
-# fetch NAME URL TAG TAGVAR - shallow clone at a tag (reused if present)
+# fetch NAME URL TAG TAGVAR [MIRROR_URL] - up to 3 tries per URL (servers have outages, e.g.
+# gitlab.gnome.org 503), then the official mirror if one is given.
 fetch() {
-  local dir="$WORK/$1"
+  local dir="$WORK/$1" url try
   if [ -d "$dir/.git" ]; then echo "    using existing clone $dir"; return; fi
-  git clone --quiet --depth 1 --branch "$3" "$2" "$dir" \
-    || die "clone of $1 at '$3' failed - set $4 to an existing tag"
+  for url in "$2" ${5:+"$5"}; do
+    for try in 1 2 3; do
+      rm -rf "$dir"
+      if git clone --quiet --depth 1 --branch "$3" "$url" "$dir"; then
+        [ "$url" = "$2" ] || echo "    cloned $1 from the mirror $url"
+        return
+      fi
+      echo "    clone of $1 from $url failed (try $try of 3)"
+      [ $try -lt 3 ] && sleep $((try * 20))
+    done
+  done
+  die "clone of $1 at '$3' failed - check the server, or set $4 to an existing tag"
 }
 
 # pick_opts SRCDIR name=value ... -> OPTS: only options this project version defines
@@ -197,7 +209,7 @@ fi
 pkg-config --modversion libusb-1.0 >/dev/null || die "pkg-config can't see libusb-1.0"
 
 log "GLib $GLIB_TAG (pcre2/libffi/libintl as meson subprojects)"
-fetch glib "$GLIB_URL" "$GLIB_TAG" GLIB_TAG
+fetch glib "$GLIB_URL" "$GLIB_TAG" GLIB_TAG "$GLIB_MIRROR"
 build_meson glib "$WORK/glib" \
   tests=false introspection=disabled nls=disabled man-pages=disabled \
   documentation=false selinux=disabled libmount=disabled sysprof=disabled
