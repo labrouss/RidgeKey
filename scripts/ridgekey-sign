@@ -107,28 +107,67 @@ create_identity() {
   echo "    certificate $(cert_hash)"
 }
 
+# Try one way of signing; on failure show codesign's own message.
+try_codesign() {   # $1 = label, rest = extra codesign args
+  local label=$1; shift
+  if codesign --force "$@" --sign "$HASH" --options runtime --identifier "$IDENT" "$TARGET" \
+       > "$LOG" 2>&1; then
+    return 0
+  fi
+  echo "    codesign failed ($label):"
+  sed 's/^/      /' "$LOG" | head -5
+  return 1
+}
+
 do_sign() {
-  local hash
+  local cert old_list
   [ -f "$TARGET" ] || die "$TARGET not found"
   if [ ! -f "$KC" ] || [ ! -f "$PWF" ] || ! kc_unlock || [ -z "$(cert_hash)" ]; then
     create_identity
   fi
   kc_unlock || die "cannot unlock $KC"
-  hash="$(cert_hash)"
-  [ -n "$hash" ] || die "certificate not found in $KC"
-  if ! codesign --force --keychain "$KC" --sign "$hash" --options runtime --identifier "$IDENT" \
-         "$TARGET" >/dev/null 2>&1; then
-    # Some macOS versions refuse an untrusted self-signed identity: trust it for code
-    # signing only (admin trust settings; macOS may ask for your password once), then retry.
-    TMPD="$(mktemp -d)"
-    security find-certificate -c "$CN" -p "$KC" > "$TMPD/cert.pem"
-    security add-trusted-cert -d -r trustRoot -p codeSign -k "$KC" "$TMPD/cert.pem" >/dev/null 2>&1 || true
-    codesign --force --keychain "$KC" --sign "$hash" --options runtime --identifier "$IDENT" \
-      "$TARGET" >/dev/null 2>&1 || die "codesign failed (the file keeps its previous signature)"
+  HASH="$(cert_hash)"
+  [ -n "$HASH" ] || die "certificate not found in $KC"
+  TMPD="$(mktemp -d)"
+  LOG="$TMPD/codesign.log"
+  cert="$TMPD/cert.pem"
+  security find-certificate -c "$CN" -p "$KC" > "$cert"
+
+  # codesign only finds identities in keychains on the search list (confirmed on Tahoe:
+  # "--keychain" alone gives "no identity found"), so put ours on root's list for this call
+  # and restore it afterwards. No trust setting is needed.
+  old_list="$(security list-keychains -d user)"
+  security list-keychains -d user -s "$KC" /Library/Keychains/System.keychain >/dev/null 2>&1 || true
+  if ! try_codesign "keychain on the search list" --keychain "$KC"; then
+    # fallback: some systems may insist on a trusted identity - trust it for code signing
+    # only, in root's own trust settings (no machine-wide change, no authorization dialog)
+    security add-trusted-cert -r trustRoot -p codeSign -k "$KC" "$cert" > "$LOG" 2>&1 \
+      || { echo "    could not add code-signing trust:"; sed 's/^/      /' "$LOG" | head -3; }
+    if ! try_codesign "trusted for code signing" --keychain "$KC"; then
+      echo "    identities codesign can see:"
+      security find-identity -p codesigning "$KC" 2>&1 | sed 's/^/      /' | head -6
+      restore_search_list "$old_list"
+      die "codesign failed (the file keeps its previous signature)"
+    fi
   fi
+  restore_search_list "$old_list"
   codesign --verify --strict "$TARGET" >/dev/null 2>&1 || die "signature does not verify"
   codesign -dr - "$TARGET" 2>&1 | grep -q 'certificate leaf' || die "unexpected designated requirement"
-  echo "    signed $(basename "$TARGET") with the local certificate (${hash:0:12}...)"
+  echo "    signed $(basename "$TARGET") with the local certificate (${HASH:0:12}...)"
+}
+
+# Put root's keychain search list back as it was (entries are quoted, may contain spaces).
+restore_search_list() {
+  local -a list=()
+  local line
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"   # trim leading blanks
+    line="${line%\"}"; line="${line#\"}"       # strip quotes
+    [ -n "$line" ] && list+=("$line")
+  done <<< "$1"
+  if [ ${#list[@]} -gt 0 ]; then
+    security list-keychains -d user -s "${list[@]}" >/dev/null 2>&1 || true
+  fi
 }
 
 do_status() {
