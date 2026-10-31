@@ -81,3 +81,5 @@ LGPL-2.1-or-later third-party libraries, linked dynamically. Our libfprint patch
 
 Not affiliated with or endorsed by Apple, Synaptics, HP or the libfprint project. Inspired by
 [hack-touchid](https://github.com/hackintosh-user/hack-touchid); it shares no code with it.
+
+
