@@ -1,6 +1,7 @@
 ---
 title: Synaptics 00f0 protocol notes
-nav_order: 10
+parent: Developers
+nav_order: 2
 ---
 
 # Synaptics Prometheus (06cb:00f0) USB / BMKT protocol - observed

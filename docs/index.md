@@ -7,10 +7,19 @@ permalink: /
 ![RidgeKey](assets/ridgekey-logo.png)
 
 # RidgeKey
+{: .fs-9 }
 
-Fingerprint authentication for macOS on laptops whose fingerprint reader macOS does not support -
-typically Hackintosh laptops with a **match-on-chip** reader (the fingerprint is stored and matched
-inside the reader). Built on [libfprint](https://fprint.freedesktop.org/).
+Touch ID-style fingerprint login for macOS on laptops whose reader macOS doesn't support.
+{: .fs-6 .fw-300 }
+
+[Download](https://github.com/labrouss/RidgeKey/releases/latest){: .btn .btn-primary .mr-2 }
+[Install guide](install.md){: .btn .mr-2 }
+[GitHub](https://github.com/labrouss/RidgeKey){: .btn }
+
+Hackintosh laptops often have a perfectly good fingerprint reader that macOS ignores. RidgeKey
+puts it to work: enroll your fingers in a small settings app, then touch the sensor wherever
+macOS would ask for your password. For **match-on-chip** readers (the fingerprint is stored and
+matched inside the reader), built on [libfprint](https://fprint.freedesktop.org/).
 
 | With RidgeKey you can | In the app | Page |
 |---|---|---|
@@ -47,4 +56,10 @@ readers are welcome on [GitHub](https://github.com/labrouss/RidgeKey/issues).
 
 Laptop readers often store Windows Hello and BIOS fingerprints too. RidgeKey **never erases the
 reader's whole storage**: it only deletes fingerprints it enrolled itself, and every build removes
-the drivers' erase-everything commands (see [Technical reference](ridgekeyd.md)).
+the drivers' erase-everything commands (see [Developers](development.md)).
+
+## More
+
+[What's new](https://github.com/labrouss/RidgeKey/blob/main/CHANGELOG.md) ·
+[Developers](development.md) ·
+[Report an issue](https://github.com/labrouss/RidgeKey/issues/new)

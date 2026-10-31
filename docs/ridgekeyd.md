@@ -1,13 +1,14 @@
 ---
 title: Technical reference
-nav_order: 9
+parent: Developers
+nav_order: 1
 ---
 
 # ridgekeyd, ridgekeyctl and sudo
 
 `ridgekeyd` is a root launchd daemon that owns the fingerprint sensor. Clients talk to it over
 XPC on the Mach service **`io.github.labrouss.ridgekey`** (system domain). `ridgekeyctl` is the
-command-line client; the future SwiftUI app, PAM module and Authorization plugin use the same API.
+command-line client; the RidgeKey app, the PAM module and the authorization plugin use the same API.
 
 ## Install
 

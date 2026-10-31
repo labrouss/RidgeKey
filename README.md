@@ -1,96 +1,70 @@
 <p align="center"><img src="assets/ridgekey-logo.png" alt="RidgeKey" width="560"></p>
 
-# RidgeKey
+<p align="center"><b>Touch ID-style fingerprint login for macOS on laptops whose reader macOS doesn't support.</b></p>
 
-Fingerprint authentication for Hackintosh laptops with **match-in-sensor** readers, built on
-[libfprint](https://fprint.freedesktop.org/). The first target is the **Synaptics Prometheus
-06cb:00f0** in the HP EliteBook 840 G8 (macOS Tahoe, Intel).
+<p align="center">
+  <a href="https://github.com/labrouss/RidgeKey/actions/workflows/macos-build.yml"><img src="https://github.com/labrouss/RidgeKey/actions/workflows/macos-build.yml/badge.svg" alt="build"></a>
+  <a href="https://github.com/labrouss/RidgeKey/releases/latest"><img src="https://img.shields.io/github/v/release/labrouss/RidgeKey?sort=semver" alt="release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT"></a>
+</p>
 
-> **Status:** working on the HP EliteBook 840 G8 (macOS Tahoe, 2026-10-31): enroll, `sudo`, the
-> lock screen (display on or asleep) and admin dialogs (System Settings locks, installers) all
-> accept a fingerprint, with the password as fallback. Early, but usable.
+<p align="center">
+  <a href="https://labrouss.github.io/RidgeKey/"><b>Documentation</b></a> ·
+  <a href="https://github.com/labrouss/RidgeKey/releases/latest"><b>Download</b></a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="https://labrouss.github.io/RidgeKey/troubleshooting.html">Troubleshooting</a>
+</p>
 
-> **Documentation:** <https://labrouss.github.io/RidgeKey/> - install, every feature, troubleshooting.
+---
 
-> **Safety:** this sensor shares one print database with Windows Hello and the HP BIOS.
-> RidgeKey **never** sends `BMKT_CMD_DEL_FULL_DB` (0x84), and every build removes that code path
-> (see `patches/libfprint/`). It only deletes prints it created itself.
+Hackintosh laptops often have a perfectly good fingerprint reader that macOS ignores. RidgeKey
+puts it to work: enroll your fingers in a small settings app, then touch the sensor wherever
+macOS would ask for your password. Built on [libfprint](https://fprint.freedesktop.org/), for
+**match-on-chip** readers - the fingerprint is stored and matched inside the reader.
 
-## Roadmap
+<p align="center"><img src="docs/assets/screenshots/overview.png" alt="RidgeKey app - Overview" width="760"></p>
 
-| Phase | What | Status |
-|---|---|---|
-| 1 | Reference capture on Linux (`linux/`), protocol notes (`docs/PROTOCOL-06cb-00f0.md`) | ✅ |
-| 2 | libfprint as a macOS library, with the example enroll/verify working against the 00f0 | ✅ |
-| 3 | `ridgekeyd` launchd daemon + `ridgekeyctl` client over XPC ([docs](docs/ridgekeyd.md)) | ✅ 0.1.0 tested on the 840 G8 (enroll, verify, identify, cancel, reboot) |
-| 4a | `sudo` with fingerprint: `pam_ridgekey.so` + `ridgekey-sudo` ([docs](docs/ridgekeyd.md#fingerprint-for-sudo)) | ✅ 0.2.0 tested: match, wrong finger, Ctrl-C |
-| 4c | Stored password: checked, then kept in the System keychain (root only); lock-state tracking | ✅ 0.3.0 tested |
-| 4b | Lock screen: `ridgekey-agent` types the stored password into Apple's own lock screen after a match ([docs](docs/ridgekeyd.md#lock-screen-unlock)) | ✅ 0.4.3 tested: display on and asleep |
-| 4d | **RidgeKey.app** (SwiftUI): status, enroll/delete with progress, lock-screen password, sudo toggle | ✅ 0.6.0 tested on the 840 G8 |
-| 4e | Stable local code signature, so Accessibility survives upgrades (`ridgekey-sign`) | ✅ 0.6.0: confirmed on the 840 G8 (reinstalls keep the certificate and the Accessibility grant) |
-| 4f | Admin password dialogs by fingerprint: `RidgeKey.bundle` authorization plugin + `ridgekey-admin` ([docs](docs/ridgekeyd.md#fingerprint-for-admin-dialogs)) | ✅ 0.7.0 tested on the 840 G8: Users & Groups unlocks with one touch (follow-ups reuse it), Use Password falls back |
-| 5 | **More readers**: all libfprint match-on-chip drivers, each audited for erase-all paths; installer reader check ([supported sensors](#supported-sensors)) | ✅ 0.8.0: package and reader check confirmed on the 840 G8 |
-| 6 | **Hardening**: enroll/delete need your password or an enrolled finger; only the installed ridgekeyctl / RidgeKey app (signatures recorded at install) may manage prints and the stored password; password lockout ([docs](docs/ridgekeyd.md#permissions)) | ✅ 0.9.0: tested on the 840 G8 (finger and password confirmation, trusted clients) |
-| 7 | **Finger actions**: single/double/triple tap or hold an enrolled finger to lock the screen or run a Shortcut; idle listening without polling ([docs](docs/ridgekeyd.md#finger-actions)) | 🔧 0.10.0 |
+## What you can do
 
-Why not an Authorization plugin for the lock screen? Since macOS 14 the lock screen uses its own
-modern UI. Getting a plugin to run there means reverting `system.login.screensaver` to the legacy
-UI, and developers report the keychain not unlocking, double lock screens and focus problems on
-Tahoe.
-
-## Try it
-
-1. Download **`RidgeKey-<version>.pkg`** from the latest
-   [release](https://github.com/labrouss/RidgeKey/releases), or from Actions → **macos-build** →
-   artifact **`RidgeKey-<version>-pkg`** (the compiled bundle for Terminal installs is the separate
-   artifact `ridgekey-<version>-macos-x86_64-bundle`).
-2. Open it. It is not signed with an Apple Developer ID, so the first time: right-click → **Open**
-   (or System Settings → Privacy & Security → **Open Anyway**). Upgrades keep your fingers and
-   settings.
-
-   Terminal alternative, same result:
-   ```sh
-   tar xzf ridgekey-*-macos-x86_64.tar.gz && cd ridgekey-*-macos-x86_64
-   xattr -dr com.apple.quarantine .     # only if downloaded with a browser
-   sudo ./install.sh
-   ```
-3. Open **RidgeKey** from Applications to enroll fingers, store the lock-screen password and turn
-   on fingerprint for sudo. Or use the command line (no sudo):
-   ```sh
-   ridgekeyctl enroll right-index
-   ridgekeyctl verify        # exit code 0 = match
-   ridgekeyctl list
-   ```
-4. Optional, fingerprint for `sudo` (your password keeps working):
-   ```sh
-   sudo ridgekey-sudo enable    # then in a NEW terminal: sudo -k; sudo -v
-   ```
-5. Optional, fingerprint for admin dialogs (System Settings locks, installers). The password
-   dialog still appears when the fingerprint fails:
-   ```sh
-   sudo ridgekey-admin enable
-   ```
-
-Details, permissions and the XPC API: [docs/ridgekeyd.md](docs/ridgekeyd.md).
-
-## Build
-
-| | |
+| Feature | Guide |
 |---|---|
-| CI | `.github/workflows/macos-build.yml`: store unit tests on Linux, a full build on GitHub's `macos-15-intel` runner, then an install test on a fresh runner (daemon, XPC permissions, the PAM module inside OpenPAM, sudo_local enable/disable, uninstall) |
-| Build | `ci/build-libfprint-macos.sh` (same script in CI and locally; Xcode CLT only, no Homebrew) |
-| Stack | libusb 1.0.30 → GLib 2.84 → gusb 0.3.10 → libfprint v1.94.10 (`-Ddrivers=synaptics`, `patches/libfprint/`) → `src/` |
-| Output | `ridgekey-<ver>-macos-x86_64.tar.gz`: relocatable and self-contained, with an installer |
+| 🔓 **Unlock the lock screen** with a touch - display on or asleep | [Lock screen](https://labrouss.github.io/RidgeKey/lock-screen.html) |
+| 🛡️ **Approve admin dialogs** - System Settings locks, installers, "wants to make changes" | [Admin dialogs](https://labrouss.github.io/RidgeKey/admin-dialogs.html) |
+| ⌨️ **Approve `sudo`** in Terminal | [sudo](https://labrouss.github.io/RidgeKey/sudo.html) |
+| 👆 **Finger actions** - tap, double/triple tap or hold a finger to lock the screen or run a Shortcut | [Finger actions](https://labrouss.github.io/RidgeKey/finger-actions.html) |
+| 🗂️ **Manage fingerprints** - enroll with live progress, delete, confirmed by a finger or your password | [Fingerprints](https://labrouss.github.io/RidgeKey/fingerprints.html) |
 
-## Supported sensors
+Your password **always keeps working**: a wrong finger, a timeout or **Use Password** brings back
+the normal macOS prompt.
 
-RidgeKey builds libfprint's **match-on-chip** drivers: the prints live on the reader itself, as on
-the 840 G8. Every release lists the exact USB IDs in `supported-devices.txt`, and the installer
-warns when none of them is connected.
+<table>
+  <tr>
+    <td><img src="docs/assets/screenshots/admin-prompt.png" alt="Admin dialog approved by fingerprint" width="360"></td>
+    <td><img src="docs/assets/screenshots/enroll.png" alt="Enrolling a finger" width="420"><br><br>
+        <img src="docs/assets/screenshots/sudo.png" alt="sudo asks for a fingerprint" width="420"></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/assets/screenshots/finger-actions.png" alt="Finger actions" width="780"></td>
+  </tr>
+</table>
 
-| Driver | Vendor (USB vendor id) | Status |
+## Install
+
+1. Download **`RidgeKey-<version>.pkg`** from the [latest release](https://github.com/labrouss/RidgeKey/releases/latest).
+2. Open it. It isn't signed with an Apple Developer ID, so the first time right-click → **Open**
+   (or System Settings → Privacy & Security → **Open Anyway**). The installer warns if it finds
+   no supported reader.
+3. Open **RidgeKey** from Applications → **Fingerprints** → **Enroll…**, then switch on the
+   features you want.
+
+Upgrades keep your fingers and settings. Terminal install, uninstall and details:
+[Install guide](https://labrouss.github.io/RidgeKey/install.html).
+
+## Supported readers
+
+| Driver | Vendor (USB id) | Status |
 |---|---|---|
-| `synaptics` | Synaptics (06cb) | ✅ tested: 06cb:00f0, HP EliteBook 840 G8, FW 10.01.3478575 |
+| `synaptics` | Synaptics (06cb) | ✅ tested: 06cb:00f0 in the HP EliteBook 840 G8, macOS Tahoe |
 | `goodixmoc` | Goodix (27c6) | untested - reports welcome |
 | `elanmoc` | Elan (04f3) | untested |
 | `fpcmoc` | FPC (10a5) | untested |
@@ -98,18 +72,38 @@ warns when none of them is connected.
 | `focaltech_moc` | FocalTech | untested |
 | `realtek` | Realtek (0bda) | untested |
 
-**Safety, for every driver:** the reader's whole print store is never erased - it may hold Windows
-Hello / BIOS prints. No driver registers libfprint's `clear_storage`, each driver's erase-all command
-aborts if it is ever queued, and goodixmoc no longer wipes its store when it cannot read its
-template list (upstream does). See `patches/libfprint/` - the build checks all of it.
+Each release lists the exact USB IDs in `supported-devices.txt`. Tried another reader?
+[Open an issue](https://github.com/labrouss/RidgeKey/issues/new) - working or not.
 
-Find your reader's ID: Linux `lsusb`; Windows Device Manager → Biometric devices → Details →
-Hardware Ids; macOS `ioreg -p IOUSB -l -w0 | grep -E '"idVendor"|"idProduct"'` (decimal).
+## Safe alongside Windows and the BIOS
+
+Laptop readers often hold Windows Hello and BIOS fingerprints in the same storage. RidgeKey
+**never erases the reader's whole storage**: it only deletes fingerprints it enrolled itself, and
+every build removes each driver's erase-everything command (checked in CI; see
+[`patches/libfprint/`](patches/libfprint/)).
+
+Changing fingerprints or finger actions needs an enrolled finger or your password, and only the
+installed RidgeKey app and `ridgekeyctl` (signatures recorded at install) may manage prints.
+Your stored password stays in the System keychain, readable only by root.
+
+## How it works
+
+```
+ RidgeKey.app ─┐                       ┌─ lock screen  (RidgeKey Agent)
+ ridgekeyctl  ─┼─ XPC ─▶ ridgekeyd ────┼─ admin dialogs (authorization plugin)
+               │        (libfprint)    ├─ sudo          (pam_ridgekey)
+               │            │          └─ finger actions (lock / Shortcuts)
+               │        USB reader
+```
+
+One root daemon, `ridgekeyd`, owns the reader; everything else asks it over XPC.
+Developers: [build, CI and architecture](https://labrouss.github.io/RidgeKey/development.html) ·
+[technical reference](https://labrouss.github.io/RidgeKey/ridgekeyd.html).
 
 ## License
 
 RidgeKey's own code is **MIT** (see `LICENSE`). libfprint, GLib, gusb and libusb are
-LGPL-2.1-or-later third-party libraries, linked dynamically. Our libfprint patches are LGPL as well.
+LGPL-2.1-or-later, linked dynamically; our libfprint patches are LGPL as well.
 
 Not affiliated with or endorsed by Apple, Synaptics, HP or the libfprint project. Inspired by
 [hack-touchid](https://github.com/hackintosh-user/hack-touchid); it shares no code with it.
