@@ -16,6 +16,8 @@ on:
       - 'launchd/**'
       - 'scripts/**'
       - 'tests/**'
+      - 'app/**'
+      - 'assets/**'
       - '.github/workflows/macos-build.yml'
   pull_request:
     paths:
@@ -25,6 +27,8 @@ on:
       - 'launchd/**'
       - 'scripts/**'
       - 'tests/**'
+      - 'app/**'
+      - 'assets/**'
       - '.github/workflows/macos-build.yml'
   workflow_dispatch:
     inputs:
