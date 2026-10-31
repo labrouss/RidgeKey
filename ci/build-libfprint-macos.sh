@@ -138,8 +138,8 @@ apply_patches() {
   done
   grep -q 'refusing to send goodixmoc DELETE_ALL' "$src/libfprint/drivers/goodixmoc/goodix.c" \
     || die "SAFETY: goodixmoc DELETE_ALL guard missing"
-  grep -q 'FP_INIT_RESET_DEVICE);' "$src/libfprint/drivers/goodixmoc/goodix.c" \
-    && die "SAFETY: goodixmoc still wipes its store on open"
+  grep -q 'RidgeKey will not erase the sensor' "$src/libfprint/drivers/goodixmoc/goodix.c" \
+    || die "SAFETY: goodixmoc still wipes its store on open (guard missing)"
   grep -q 'refusing to send FPC_CMD_DELETE_DB' "$src/libfprint/drivers/fpcmoc/fpc.c" \
     || die "SAFETY: fpcmoc DELETE_DB guard missing"
   grep -q 'refusing to build an egismoc delete-all' "$src/libfprint/drivers/egismoc/egismoc.c" \

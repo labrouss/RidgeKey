@@ -75,7 +75,7 @@ License: LGPL-2.1-or-later (modifies libfprint).
  
    fpi_device_class_auto_initialize_features (dev_class);
 --- a/libfprint/drivers/goodixmoc/goodix.c	2026-10-31 13:13:58.014436129 +0200
-+++ b/libfprint/drivers/goodixmoc/goodix.c	2026-10-31 13:13:58.083358215 +0200
++++ b/libfprint/drivers/goodixmoc/goodix.c	2026-10-31 13:27:34.928299849 +0200
 @@ -342,6 +342,10 @@
  
    g_autoptr(FpiUsbTransfer) transfer = NULL;
@@ -87,24 +87,23 @@ License: LGPL-2.1-or-later (modifies libfprint).
    CommandData *data = g_new0 (CommandData, 1);
  
    transfer = alloc_cmd_transfer (FP_DEVICE (self), cmd0, cmd1, payload, payload_len);
-@@ -1064,9 +1068,14 @@
+@@ -1064,6 +1068,15 @@
  {
    if (error)
      {
-+      /* ridgekey: upstream wipes the whole template store here, without asking. Fail the open
-+       * instead; erasing prints is the user's decision (Windows / vendor tools). */
-       fp_warn ("Template storage appears to have been corrupted! Error was: %s", error->message);
--      fp_warn ("A known reason for this to happen is a firmware bug triggered by another storage area being initialized.");
--      fpi_ssm_jump_to_state (self->task_ssm, FP_INIT_RESET_DEVICE);
++      /* ridgekey: upstream wipes the whole template store here, without asking (the reset
++       * state below). Fail the open instead; erasing prints is the user's decision. */
++      fp_warn ("Template list unreadable (%s) - RidgeKey will not erase the sensor's storage", error->message);
 +      fpi_ssm_mark_failed (self->task_ssm,
 +                           fpi_device_error_new_msg (FP_DEVICE_ERROR_DATA_INVALID,
 +                                                     "the sensor's template list is unreadable; RidgeKey "
 +                                                     "will not erase it - reset the sensor's storage with "
 +                                                     "the vendor's tools if needed"));
-     }
-   else
-     {
-@@ -1606,7 +1615,7 @@
++      return;
+       fp_warn ("Template storage appears to have been corrupted! Error was: %s", error->message);
+       fp_warn ("A known reason for this to happen is a firmware bug triggered by another storage area being initialized.");
+       fpi_ssm_jump_to_state (self->task_ssm, FP_INIT_RESET_DEVICE);
+@@ -1606,7 +1619,7 @@
  
  }
  
@@ -113,7 +112,7 @@ License: LGPL-2.1-or-later (modifies libfprint).
  gx_fp_template_delete_all (FpDevice *device)
  {
    FpiDeviceGoodixMoc *self = FPI_DEVICE_GOODIXMOC (device);
-@@ -1680,7 +1689,7 @@
+@@ -1680,7 +1693,7 @@
    dev_class->probe  = gx_fp_probe;
    dev_class->enroll = gx_fp_enroll;
    dev_class->delete = gx_fp_template_delete;
