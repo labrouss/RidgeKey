@@ -11,6 +11,18 @@ nav_order: 8
 
 ## First checks
 
+**In the app: Overview.**
+
+| Row | Should say | If not |
+|---|---|---|
+| ridgekeyd | the version | RidgeKey is not running - reinstall, or see Terminal below |
+| Sensor | your reader's name | no supported reader found - check it is connected; after sleep wait a few seconds and click ⟳ |
+| Fingerprints / Lock-screen password / Fingerprint for sudo | ✓ | open that pane and set it up |
+
+**Test my fingerprint** (Overview) checks the reader and your prints in one go.
+
+**In Terminal:**
+
 ```sh
 ridgekeyctl status                                   # daemon version, console user, reader
 tail -30 /Library/Logs/RidgeKey/ridgekeyd.log        # daemon log
@@ -44,7 +56,7 @@ tail -20 ~/Library/Logs/RidgeKey-agent.log           # lock screen / finger acti
 
 | Symptom | Fix |
 |---|---|
-| Touch does nothing on the lock screen | App → Lock Screen: password **stored and valid**? Accessibility: **RidgeKey Agent** on? Agent log says `ridgekeyd accepted this agent`? |
+| Touch does nothing on the lock screen | App → **Lock Screen**: status **stored and valid**? **Open Accessibility settings**: **RidgeKey Agent** on? Agent log says `ridgekeyd accepted this agent`? |
 | Agent log: `Accessibility permission needed` | System Settings → Privacy & Security → Accessibility → add/enable RidgeKey Agent ([steps](lock-screen.md#set-up-once)) |
 | Agent log: `REFUSED this agent` | reinstall (the agent must be root-owned, signed, hardened) |
 | Stopped working after a password change | store the new password |
@@ -71,12 +83,17 @@ tail -20 ~/Library/Logs/RidgeKey-agent.log           # lock screen / finger acti
 
 | Symptom | Fix |
 |---|---|
-| App shows "Listening: off" | needs: a saved action, enrolled fingers, unlocked screen, RidgeKey Agent running. `ridgekeyctl status` shows `(listening for finger actions)` when on. Restart the agent (above) after an upgrade. |
+| **Finger Actions** shows "Listening: off" | needs: a saved action, enrolled fingers, unlocked screen, RidgeKey Agent running. `ridgekeyctl status` shows `(listening for finger actions)` when on. Restart the agent (above) after an upgrade. |
 | Action not run | `grep "action:" /Library/Logs/RidgeKey/ridgekeyd.log \| tail` - `no rule` means the gesture did not match a rule (e.g. a single tap on a double-tap-only finger) |
 | Shortcut does not run | the name must match exactly; test with `shortcuts run "Name"` |
 | Double tap seen as single | tap a bit faster (taps must be < 0.7 s apart) |
 
 ## Report a problem
+
+**RidgeKey** → **About** shows the app and `ridgekeyd` versions (they should match) and has a
+**Report an issue** link.
+
+{% include screenshot.html name="about" alt="About pane" %}
 
 Open an [issue](https://github.com/labrouss/RidgeKey/issues/new) with `ridgekeyctl status`, the
 RidgeKey version, your reader's USB ID and the relevant log lines (logs never contain passwords).

@@ -1,0 +1,9 @@
+{%- comment -%}
+  {% include screenshot.html name="fingerprints" alt="..." %}
+  Shows assets/screenshots/<name>.png once that file exists - pages work without it.
+{%- endcomment -%}
+{%- assign shot_path = "/assets/screenshots/" | append: include.name | append: ".png" -%}
+{%- assign shot = site.static_files | where: "path", shot_path | first -%}
+{%- if shot -%}
+<p><img src="{{ shot_path | relative_url }}" alt="{{ include.alt }}" style="max-width: 100%; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,.35);"></p>
+{%- endif -%}

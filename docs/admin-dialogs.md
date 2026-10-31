@@ -6,37 +6,44 @@ nav_order: 6
 # Admin dialogs
 
 System Settings locks, installers and other "… wants to make changes" requests show a RidgeKey
-notice first: **touch an administrator's finger**, or choose **Use Password** for the normal dialog.
+notice first: **touch an administrator's finger** - or click **Use Password** for the normal
+dialog.
+
+{% include screenshot.html name="admin-prompt" alt="RidgeKey notice over an admin request" %}
 
 ## Turn on
 
-App → **Admin Dialogs** → toggle, or:
-```sh
-sudo ridgekey-admin enable       # the common admin dialogs
-ridgekey-admin status
-sudo ridgekey-admin disable      # restores macOS's original rules exactly
-```
-Approving needs an **administrator** with enrolled fingers **and** a stored password
-([Lock screen](lock-screen.md), step 1).
+**RidgeKey** → **Admin Dialogs** → switch on **Use fingerprint for admin dialogs** (macOS asks
+for an administrator's password once to make the change).
+
+{% include screenshot.html name="admin-dialogs" alt="Admin Dialogs pane" %}
+
+Approving needs an **administrator** with enrolled fingers **and** a stored password - the
+**Stored password** row shows it; store it under [Lock Screen](lock-screen.md) if needed.
+
+**Try it:** System Settings → **Users & Groups** → click a lock or **Unlock**, and touch the reader.
 
 | You do | macOS does |
 |---|---|
-| touch an enrolled administrator's finger | approves - one touch covers the follow-up requests of the same action (15 s) |
-| wrong finger 3×, no touch within 20 s, **Use Password** | the normal password dialog |
-| no prints / no stored password / daemon stopped | the normal password dialog straight away |
-
-## Which dialogs
-
-`enable` switches the common ones (System Settings panes, installing software, admin tool
-requests). To find others, run `ridgekey-admin watch`, open the dialog, and enable the right it
-shows: `sudo ridgekey-admin enable <right>`. `sudo ridgekey-admin candidates` lists every
-admin-password right on your Mac.
+| touch an enrolled administrator's finger | approves - one touch covers the follow-up requests of that action |
+| wrong finger 3×, no touch within 20 s, or **Use Password** | shows the normal password dialog |
+| no prints, no stored password, RidgeKey not running | shows the normal password dialog straight away |
 
 ## Safety
 
-- The plugin only ever answers "allow" or "deny", so macOS can always fall back to your password.
-- `enable` refuses unless macOS can load the plugin (self-test); the installer re-checks after
-  every upgrade.
-- Every changed rule is backed up and restored exactly by `disable` and by the uninstaller.
+- Your password always works: RidgeKey can only approve or step aside, never block.
+- Turning it on first checks that macOS can load RidgeKey's plugin; every upgrade re-checks.
+- Turning it off restores macOS's original rules exactly. So does uninstalling.
+
+## From Terminal
+
+```sh
+sudo ridgekey-admin enable           # the common admin dialogs
+ridgekey-admin status
+sudo ridgekey-admin disable          # original rules back
+ridgekey-admin watch                 # shows which right a dialog uses
+sudo ridgekey-admin enable <right>   # add one that is not covered
+sudo ridgekey-admin candidates       # every admin-password right on this Mac
+```
 
 **If admin dialogs ever misbehave:** `sudo ridgekey-admin disable` (sudo is not affected).
