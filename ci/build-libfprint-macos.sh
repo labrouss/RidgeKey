@@ -482,10 +482,13 @@ tar -C "$WORK/bundle" -czf "$DIST/$BUNDLE_NAME.tar.gz" "$BUNDLE_NAME"
 # Double-click installer: same bundle, runs the same install.sh from its postinstall.
 PKG_NAME="RidgeKey-$RK_VER.pkg"
 bash "$REPO/scripts/build-pkg.sh" "$BUNDLE" "$DIST/$PKG_NAME" "$RK_VER" || die "building $PKG_NAME failed"
-( cd "$DIST" && shasum -a 256 "$BUNDLE_NAME.tar.gz" "$PKG_NAME" > "ridgekey-$RK_VER.sha256" )
-rm -f "$DIST/$BUNDLE_NAME.tar.gz.sha256"
+# One checksum file per deliverable (CI publishes them as two separate artifacts).
+( cd "$DIST" && shasum -a 256 "$BUNDLE_NAME.tar.gz" > "$BUNDLE_NAME.tar.gz.sha256" \
+             && shasum -a 256 "$PKG_NAME" > "$PKG_NAME.sha256" )
+rm -f "$DIST/ridgekey-$RK_VER.sha256"
+[ -n "${GITHUB_OUTPUT:-}" ] && echo "version=$RK_VER" >> "$GITHUB_OUTPUT"
 gh_endgroup
 echo
 echo "Done: $DIST/$PKG_NAME"
 echo "      $DIST/$BUNDLE_NAME.tar.gz"
-cat "$DIST/ridgekey-$RK_VER.sha256"
+cat "$DIST/$PKG_NAME.sha256" "$DIST/$BUNDLE_NAME.tar.gz.sha256"

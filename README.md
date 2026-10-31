@@ -37,8 +37,9 @@ Tahoe.
 ## Try it
 
 1. Download **`RidgeKey-<version>.pkg`** from the latest
-   [release](https://github.com/labrouss/RidgeKey/releases) (or from Actions → **macos-build** →
-   artifact `ridgekey-macos-x86_64`).
+   [release](https://github.com/labrouss/RidgeKey/releases), or from Actions → **macos-build** →
+   artifact **`RidgeKey-<version>-pkg`** (the compiled bundle for Terminal installs is the separate
+   artifact `ridgekey-<version>-macos-x86_64-bundle`).
 2. Open it. It is not signed with an Apple Developer ID, so the first time: right-click → **Open**
    (or System Settings → Privacy & Security → **Open Anyway**). Upgrades keep your fingers and
    settings.

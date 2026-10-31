@@ -87,14 +87,29 @@ jobs:
           done
 
       - name: Build and package
+        id: build
         env:
           DIST: ${{ github.workspace }}/dist
         run: bash ci/build-libfprint-macos.sh
 
-      - uses: actions/upload-artifact@v4
+      # Two separate downloads: the double-click installer, and the compiled bundle (Terminal
+      # install, diagnostics, libfprint examples).
+      - name: Upload the installer (.pkg)
+        uses: actions/upload-artifact@v4
         with:
-          name: ridgekey-macos-x86_64
-          path: dist/*
+          name: RidgeKey-${{ steps.build.outputs.version }}-pkg
+          path: |
+            dist/RidgeKey-*.pkg
+            dist/RidgeKey-*.pkg.sha256
+          if-no-files-found: error
+
+      - name: Upload the compiled bundle (.tar.gz)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ridgekey-${{ steps.build.outputs.version }}-macos-x86_64-bundle
+          path: |
+            dist/ridgekey-*-macos-x86_64.tar.gz
+            dist/ridgekey-*-macos-x86_64.tar.gz.sha256
           if-no-files-found: error
 
       - name: Upload logs on failure
@@ -117,8 +132,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: ridgekey-macos-x86_64
+          pattern: '*idge*ey-*'          # both: the .pkg and the bundle
           path: dist
+          merge-multiple: true
       - name: Install and test
         run: bash ci/install-test.sh dist/ridgekey-*-macos-x86_64.tar.gz
 
@@ -131,8 +147,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: ridgekey-macos-x86_64
+          pattern: '*idge*ey-*'
           path: dist
+          merge-multiple: true
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
