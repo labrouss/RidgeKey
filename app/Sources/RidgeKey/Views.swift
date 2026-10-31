@@ -4,13 +4,14 @@ import AppKit
 import SwiftUI
 
 enum Pane: String, CaseIterable, Identifiable {
-    case overview, fingerprints, lockScreen, admin, sudo, about
+    case overview, fingerprints, actions, lockScreen, admin, sudo, about
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .overview: return "Overview"
         case .fingerprints: return "Fingerprints"
+        case .actions: return "Finger Actions"
         case .lockScreen: return "Lock Screen"
         case .admin: return "Admin Dialogs"
         case .sudo: return "sudo"
@@ -22,6 +23,7 @@ enum Pane: String, CaseIterable, Identifiable {
         switch self {
         case .overview: return "gauge"
         case .fingerprints: return "touchid"
+        case .actions: return "hand.tap"
         case .lockScreen: return "lock.display"
         case .admin: return "lock.shield"
         case .sudo: return "terminal"
@@ -46,6 +48,7 @@ struct ContentView: View {
                 case .overview: OverviewView()
                 case .fingerprints: FingerprintsView()
                 case .lockScreen: LockScreenView()
+                case .actions: ActionsView()
                 case .admin: AdminView()
                 case .sudo: SudoView()
                 case .about: AboutView()
@@ -338,6 +341,85 @@ struct SudoView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+// MARK: - finger actions
+
+struct ActionsView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var draft: [AppModel.FingerAction] = []
+    @State private var loaded = false
+
+    var body: some View {
+        Form {
+            Section {
+                if model.fingers.isEmpty {
+                    Text("Enroll a finger first (Fingerprints).").foregroundStyle(.secondary)
+                }
+                ForEach($draft) { $a in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Picker("", selection: $a.finger) {
+                                ForEach(model.fingers, id: \.self) { Text(RK.label($0)).tag($0) }
+                            }
+                            .labelsHidden().frame(width: 150)
+                            Picker("", selection: $a.hold) {
+                                Text("tap").tag(false)
+                                Text("hold").tag(true)
+                            }
+                            .labelsHidden().pickerStyle(.segmented).frame(width: 110)
+                            if a.hold {
+                                Stepper("\(a.seconds) s", value: $a.seconds, in: 1...10).frame(width: 90)
+                            }
+                            Spacer()
+                            Button(role: .destructive) { draft.removeAll { $0.id == a.id } } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        HStack {
+                            Text("→")
+                            Picker("", selection: $a.action) {
+                                Text("Lock the screen").tag("lock")
+                                Text("Run a Shortcut").tag("shortcut")
+                            }
+                            .labelsHidden().frame(width: 170)
+                            if a.action == "shortcut" {
+                                TextField("Shortcut name", text: $a.shortcut)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                HStack {
+                    Button("Add action") {
+                        let f = model.fingers.first ?? "right-index"
+                        draft.append(.init(finger: f, hold: false, seconds: 2, action: "lock", shortcut: ""))
+                    }
+                    .disabled(model.fingers.isEmpty || draft.count >= 20)
+                    Spacer()
+                    Button("Save") { Task { await model.saveActions(draft) } }
+                        .disabled(!model.reachable || draft == model.actions ||
+                                  draft.contains { $0.action == "shortcut" && $0.shortcut.isEmpty })
+                        .keyboardShortcut(.defaultAction)
+                }
+                if !model.actionsMessage.isEmpty {
+                    Text(model.actionsMessage).foregroundStyle(.secondary)
+                }
+                StatusRow(title: "Listening", detail: model.listening ? "waiting for your fingers" : "off",
+                          state: model.listening ? .good : .off)
+            }
+            Section("How it works") {
+                Text("While your screen is unlocked and the sensor is idle, RidgeKey waits for one of "
+                     + "your enrolled fingers: a tap, or a hold of N seconds (released). The sensor waits "
+                     + "in hardware, so nothing polls. sudo, the lock screen and admin dialogs always come "
+                     + "first. Shortcuts are the ones you build in the Shortcuts app; RidgeKey Agent runs them as you.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .onAppear { if !loaded { draft = model.actions; loaded = true } }
+        .onChange(of: model.actions) { new in if draft.isEmpty || !loaded { draft = new } }
     }
 }
 

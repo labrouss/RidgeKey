@@ -11,3 +11,11 @@ cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Werror=implicit-function-decl
    "$HERE/test-store.c" "$HERE/mock-fprint.c" "$SRC/daemon/store.c" \
    $(pkg-config --cflags --libs gio-2.0) -o "$OUT"
 "$OUT"
+
+# finger actions (src/daemon/actions.c)
+OUT2="$(dirname "$OUT")/test-actions"
+cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Werror=implicit-function-declaration \
+   -I"$HERE" -I"$SRC/common" -I"$SRC/daemon" \
+   "$HERE/test-actions.c" "$SRC/daemon/actions.c" \
+   $(pkg-config --cflags --libs gio-2.0) -o "$OUT2"
+"$OUT2"

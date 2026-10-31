@@ -39,7 +39,7 @@
 
 #include <string.h>
 
-#define RK_VERSION        "0.9.0"
+#define RK_VERSION        "0.10.0"
 #define RK_SERVICE_NAME   "io.github.labrouss.ridgekey"
 
 /* The only program allowed to receive the stored password (op "unlock"). */
@@ -83,6 +83,13 @@
 #define RK_KEY_CLIENT          "client"   /* authorize: path of the app asking for it */
 #define RK_KEY_CLIENT_PID      "client-pid" /* authorize: pid of that app = authd's creator-pid (0 = unknown) */
 #define RK_KEY_CALLER_PID      "caller-pid" /* authorize: process that submitted the request (log only) */
+#define RK_KEY_ACTIONS         "actions"  /* actions-get/-set: array of rule dictionaries */
+#define RK_KEY_GESTURE         "gesture"  /* rule: "tap" | "hold" */
+#define RK_KEY_SECONDS         "seconds"  /* rule: hold time */
+#define RK_KEY_ACTION          "action"   /* rule / action event: "lock" | "shortcut" */
+#define RK_KEY_SHORTCUT        "shortcut" /* rule / action event: Shortcuts app name */
+#define RK_KEY_HELD            "held"     /* action event: seconds the finger was held */
+#define RK_KEY_LISTENING       "listening" /* status: waiting for finger actions */
 #define RK_KEY_AUTH            "auth"     /* enroll/delete: "password" (+ "password") or "finger" */
 #define RK_KEY_REUSED          "reused"   /* authorize reply: approved from a recent touch */
 
@@ -102,6 +109,8 @@
 #define RK_OP_UNLOCK    "unlock"    /* the RidgeKey agent only (see peer.c), for the console user while
                                      * the screen is locked: wait for a matching finger, then reply
                                      * with "password" so the agent can type it into the lock screen */
+#define RK_OP_ACTIONS_GET "actions-get" /* own user, root: any - finger action rules */
+#define RK_OP_ACTIONS_SET "actions-set" /* own user via a trusted client, root: any - replace them */
 #define RK_OP_AUTHORIZE "authorize" /* root only (the RidgeKey authorization plugin): show an on-screen
                                      * prompt, match any enrolled admin's finger, then reply with
                                      * "user" + "password" for macOS to verify (builtin:authenticate).
@@ -112,6 +121,7 @@
 #define RK_EV_ENROLL_PROGRESS "enroll-progress"
 #define RK_EV_RETRY           "retry"
 #define RK_EV_CONFIRM         "confirm"     /* enroll/delete: touch an enrolled finger to confirm */
+#define RK_EV_ACTION          "action"      /* to the agent: perform this finger action */
 #define RK_EV_CONFIRMED       "confirmed"   /* confirmation accepted, the operation continues */
 
 /* error codes */

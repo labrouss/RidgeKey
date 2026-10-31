@@ -47,6 +47,12 @@ usage (FILE *f)
     "  password clear          remove the stored password\n"
     "  password check          is a password stored, and is it still your login password?\n"
     "                          (password set --stdin reads it from standard input, for scripts)\n"
+    "  actions                 your finger actions\n"
+    "  action add FINGER tap lock|shortcut [NAME]\n"
+    "  action add FINGER hold SECONDS lock|shortcut [NAME]\n"
+    "                          e.g. action add left-index tap lock\n"
+    "                               action add right-thumb hold 2 shortcut \"Work mode\"\n"
+    "  action remove FINGER [tap|hold]   action clear\n"
     "  authorize [RIGHT]       test the admin-dialog path: on-screen prompt + an admin's finger\n"
     "                          (root only; the password is never printed)\n"
     "\n"
@@ -121,8 +127,9 @@ print_result (const char *op, xpc_object_t reply)
 
       const char *cu = xpc_dictionary_get_string (reply, RK_KEY_CONSOLE_USER);
 
-      printf ("ridgekeyd %s%s\n", xpc_dictionary_get_string (reply, RK_KEY_VERSION),
-              xpc_dictionary_get_bool (reply, RK_KEY_BUSY) ? " (busy)" : "");
+      printf ("ridgekeyd %s%s%s\n", xpc_dictionary_get_string (reply, RK_KEY_VERSION),
+              xpc_dictionary_get_bool (reply, RK_KEY_BUSY) ? " (busy)" : "",
+              xpc_dictionary_get_bool (reply, RK_KEY_LISTENING) ? " (listening for finger actions)" : "");
       if (cu)
         printf ("console:  %s%s\n", *cu ? cu : "login window",
                 xpc_dictionary_get_bool (reply, RK_KEY_SCREEN_LOCKED) ? " (screen locked)" : "");
@@ -206,6 +213,145 @@ send_cancel (void)
   xpc_release (msg);
 }
 
+/* ------------------------------------------------------------------------------------------ */
+/* finger actions: get -> edit -> set (sync)                                                   */
+
+static xpc_object_t
+call_sync (xpc_connection_t c, xpc_object_t msg)
+{
+  xpc_object_t r = xpc_connection_send_message_with_reply_sync (c, msg);
+
+  if (xpc_get_type (r) != XPC_TYPE_DICTIONARY)
+    {
+      fprintf (stderr, "error: cannot reach ridgekeyd. Is it installed and running?\n");
+      exit (3);
+    }
+  if (!xpc_dictionary_get_bool (r, RK_KEY_OK))
+    {
+      print_failure (r);
+      exit (1);
+    }
+  return r;
+}
+
+static void
+print_rule (xpc_object_t d)
+{
+  const char *g = xpc_dictionary_get_string (d, RK_KEY_GESTURE);
+  const char *a = xpc_dictionary_get_string (d, RK_KEY_ACTION);
+  const char *sc = xpc_dictionary_get_string (d, RK_KEY_SHORTCUT);
+
+  printf ("  %-13s %-4s", xpc_dictionary_get_string (d, RK_KEY_FINGER), g);
+  if (g && strcmp (g, "hold") == 0)
+    printf (" %llds", (long long) xpc_dictionary_get_int64 (d, RK_KEY_SECONDS));
+  else
+    printf ("   ");
+  printf ("  -> %s%s%s%s\n", a, sc && *sc ? " \"" : "", sc && *sc ? sc : "", sc && *sc ? "\"" : "");
+}
+
+static int
+actions_cmd (const char *user, int argc, char **argv)
+{
+  xpc_connection_t c = xpc_connection_create_mach_service (RK_SERVICE_NAME, NULL, XPC_CONNECTION_MACH_SERVICE_PRIVILEGED);
+  xpc_object_t q, r, rules, out;
+  const char *sub = argc > 0 ? argv[0] : "list";
+  size_t i, n;
+
+  xpc_connection_set_event_handler (c, ^(xpc_object_t ev) { (void) ev; });
+  xpc_connection_resume (c);
+
+  q = xpc_dictionary_create (NULL, NULL, 0);
+  xpc_dictionary_set_string (q, RK_KEY_OP, RK_OP_ACTIONS_GET);
+  if (user)
+    xpc_dictionary_set_string (q, RK_KEY_USER, user);
+  r = call_sync (c, q);
+  rules = xpc_dictionary_get_value (r, RK_KEY_ACTIONS);
+  n = rules ? xpc_array_get_count (rules) : 0;
+
+  if (strcmp (sub, "list") == 0)
+    {
+      printf ("%s: %zu finger action%s\n", xpc_dictionary_get_string (r, RK_KEY_USER), n, n == 1 ? "" : "s");
+      for (i = 0; i < n; i++)
+        print_rule (xpc_array_get_value (rules, i));
+      return 0;
+    }
+
+  out = xpc_array_create (NULL, 0);
+  if (strcmp (sub, "add") == 0)
+    {
+      const char *finger = argc > 1 ? argv[1] : NULL, *gesture = argc > 2 ? argv[2] : NULL;
+      int ai = 3;
+      long secs = 0;
+      xpc_object_t d;
+
+      if (!rk_finger_from_name (finger) || !gesture ||
+          (strcmp (gesture, "tap") != 0 && strcmp (gesture, "hold") != 0))
+        {
+          fprintf (stderr, "usage: ridgekeyctl action add FINGER tap|hold [SECONDS] lock|shortcut [NAME]\n");
+          return 2;
+        }
+      if (strcmp (gesture, "hold") == 0)
+        {
+          secs = argc > 3 ? strtol (argv[3], NULL, 10) : 0;
+          ai = 4;
+        }
+      if (argc <= ai)
+        {
+          fprintf (stderr, "missing action: lock or shortcut NAME\n");
+          return 2;
+        }
+      /* keep every other rule; replace one with the same finger + gesture */
+      for (i = 0; i < n; i++)
+        {
+          xpc_object_t e = xpc_array_get_value (rules, i);
+
+          if (strcmp (xpc_dictionary_get_string (e, RK_KEY_FINGER), finger) == 0 &&
+              strcmp (xpc_dictionary_get_string (e, RK_KEY_GESTURE), gesture) == 0)
+            continue;
+          xpc_array_append_value (out, e);
+        }
+      d = xpc_dictionary_create (NULL, NULL, 0);
+      xpc_dictionary_set_string (d, RK_KEY_FINGER, finger);
+      xpc_dictionary_set_string (d, RK_KEY_GESTURE, gesture);
+      xpc_dictionary_set_int64 (d, RK_KEY_SECONDS, secs);
+      xpc_dictionary_set_string (d, RK_KEY_ACTION, argv[ai]);
+      if (argc > ai + 1)
+        xpc_dictionary_set_string (d, RK_KEY_SHORTCUT, argv[ai + 1]);
+      xpc_array_append_value (out, d);
+      xpc_release (d);
+    }
+  else if (strcmp (sub, "remove") == 0 && argc > 1)
+    {
+      for (i = 0; i < n; i++)
+        {
+          xpc_object_t e = xpc_array_get_value (rules, i);
+
+          if (strcmp (xpc_dictionary_get_string (e, RK_KEY_FINGER), argv[1]) == 0 &&
+              (argc < 3 || strcmp (xpc_dictionary_get_string (e, RK_KEY_GESTURE), argv[2]) == 0))
+            continue;
+          xpc_array_append_value (out, e);
+        }
+    }
+  else if (strcmp (sub, "clear") != 0)
+    {
+      fprintf (stderr, "usage: ridgekeyctl action add|remove|clear ... (see ridgekeyctl -h)\n");
+      return 2;
+    }
+
+  q = xpc_dictionary_create (NULL, NULL, 0);
+  xpc_dictionary_set_string (q, RK_KEY_OP, RK_OP_ACTIONS_SET);
+  if (user)
+    xpc_dictionary_set_string (q, RK_KEY_USER, user);
+  xpc_dictionary_set_value (q, RK_KEY_ACTIONS, out);
+  call_sync (c, q);
+  printf ("Saved. Your finger actions:\n");
+  for (i = 0; i < xpc_array_get_count (out); i++)
+    print_rule (xpc_array_get_value (out, i));
+  if (xpc_array_get_count (out) == 0)
+    printf ("  (none - RidgeKey no longer listens for finger actions)\n");
+  return 0;
+}
+
 int
 main (int argc, char **argv)
 {
@@ -233,6 +379,10 @@ main (int argc, char **argv)
       return 2;
     }
   op = argv[optind++];
+  if (strcmp (op, "actions") == 0)
+    return actions_cmd (user, 0, NULL);
+  if (strcmp (op, "action") == 0)
+    return actions_cmd (user, argc - optind, argv + optind);
 
   /* command arguments */
   for (; optind < argc; optind++)

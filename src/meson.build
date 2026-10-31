@@ -1,7 +1,7 @@
 # RidgeKey - daemon and command-line client
 # SPDX-License-Identifier: MIT
 project('ridgekey', 'c',
-  version: '0.9.0',
+  version: '0.10.0',
   license: 'MIT',
   meson_version: '>= 0.59.0',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=debugoptimized'])
@@ -32,7 +32,7 @@ daemon_frameworks = dependency('appleframeworks', modules: ['CoreFoundation', 'I
 
 executable('ridgekeyd',
   ['daemon/ridgekeyd.c', 'daemon/store.c', 'daemon/secret.c', 'daemon/console.c', 'daemon/peer.c',
-   'daemon/prompt.c'],
+   'daemon/prompt.c', 'daemon/actions.c'],
   include_directories: common_inc,
   dependencies: [glib_dep, gio_dep, libfprint_dep, pam_dep, bsm_dep, daemon_frameworks],
   install: true)

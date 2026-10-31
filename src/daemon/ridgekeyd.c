@@ -31,6 +31,7 @@
 
 #include "ridgekey-protocol.h"
 #include "console.h"
+#include "actions.h"
 #include "peer.h"
 #include "prompt.h"
 #include "secret.h"
@@ -120,9 +121,9 @@ reply_error (Request *r, const char *code, const char *fmt, ...)
 /* ------------------------------------------------------------------------------------------ */
 /* Daemon state                                                                                */
 
-typedef enum { OP_ENROLL, OP_VERIFY, OP_IDENTIFY, OP_DELETE, OP_PURGE, OP_UNLOCK, OP_AUTHORIZE } OpKind;
+typedef enum { OP_ENROLL, OP_VERIFY, OP_IDENTIFY, OP_DELETE, OP_PURGE, OP_UNLOCK, OP_AUTHORIZE, OP_LISTEN } OpKind;
 
-static const char *const op_names[] = { "enroll", "verify", "identify", "delete", "purge", "unlock", "authorize" };
+static const char *const op_names[] = { "enroll", "verify", "identify", "delete", "purge", "unlock", "authorize", "listen" };
 
 typedef struct {
   OpKind        kind;
@@ -150,6 +151,9 @@ typedef struct {
   gint64        client_pid;     /* authorize: requesting app's pid (0 = unknown) */
   gint          misses;         /* authorize / confirm: fingers that matched nobody */
   gboolean      confirm;        /* enroll/delete: first match one of the user's enrolled fingers */
+  GPtrArray    *rules;          /* listen: the console user's finger actions */
+  gint64        present_since;  /* finger-status timing (monotonic us), for hold gestures */
+  gint64        lifted_at;
 
   GError       *error;          /* final error, if any */
   const char   *err_code;       /* overrides the code derived from error */
@@ -167,9 +171,17 @@ static void purge_next (Op *op);
 static void
 send_event (Op *op, xpc_object_t ev)
 {
-  xpc_connection_send_message (op->req->conn, ev);
+  if (op->req)                     /* the internal listen operation has no client */
+    xpc_connection_send_message (op->req->conn, ev);
   xpc_release (ev);
 }
+
+static void listen_schedule (guint delay_ms);
+static void run_on_main (GSourceFunc fn, gpointer data);
+static void on_listen_identified (GObject *src, GAsyncResult *res, gpointer data);
+static GQueue deferred = G_QUEUE_INIT;   /* requests that arrived while listening */
+static guint  listen_failures;           /* consecutive listener errors -> back off */
+static gboolean handle_request (gpointer data);
 
 static const char *
 error_code (Op *op, const GError *e)
@@ -209,6 +221,7 @@ op_free (Op *op)
   prompt_close (op->prompt);
   g_free (op->right);
   g_free (op->client);
+  g_clear_pointer (&op->rules, g_ptr_array_unref);
   g_free (op->username);
   request_free (op->req);
   g_free (op);
@@ -226,23 +239,39 @@ op_complete (Op *op)
         msg = "the sensor's storage is full - remove prints in Windows Hello / BIOS or old RidgeKey prints";
       if (op->kind == OP_AUTHORIZE && strcmp (code, RK_ERR_CANCELLED) == 0)
         msg = "Use Password chosen - macOS shows its password dialog instead";
-      xpc_dictionary_set_bool (op->reply, RK_KEY_OK, false);
-      xpc_dictionary_set_string (op->reply, RK_KEY_ERROR, code);
-      xpc_dictionary_set_string (op->reply, RK_KEY_MESSAGE, msg);
-      g_message ("%s for %s: %s (%s)", op_names[op->kind], op->username ?: "-", msg, code);
+      if (op->reply)
+        {
+          xpc_dictionary_set_bool (op->reply, RK_KEY_OK, false);
+          xpc_dictionary_set_string (op->reply, RK_KEY_ERROR, code);
+          xpc_dictionary_set_string (op->reply, RK_KEY_MESSAGE, msg);
+        }
+      if (op->kind != OP_LISTEN || strcmp (code, RK_ERR_CANCELLED) != 0)
+        g_message ("%s for %s: %s (%s)", op_names[op->kind], op->username ?: "-", msg, code);
     }
-  else
+  else if (op->reply)
     {
       xpc_dictionary_set_bool (op->reply, RK_KEY_OK, true);
       g_message ("%s for %s: ok", op_names[op->kind], op->username ?: "-");
     }
 
-  xpc_connection_send_message (op->req->conn, op->reply);
+  if (op->req)
+    xpc_connection_send_message (op->req->conn, op->reply);
   current = NULL;
   op_free (op);
 
   if (quitting)
-    g_main_loop_quit (loop);
+    {
+      g_main_loop_quit (loop);
+      return;
+    }
+  /* Requests that interrupted the listener run now; otherwise resume listening. */
+  if (!g_queue_is_empty (&deferred))
+    {
+      while (!g_queue_is_empty (&deferred))
+        run_on_main (handle_request, g_queue_pop_head (&deferred));
+    }
+  else
+    listen_schedule (listen_failures ? MIN (60000u, 2000u << MIN (listen_failures, 5u)) : 400);
 }
 
 static void
@@ -301,6 +330,17 @@ on_finger_status (GObject *obj, GParamSpec *pspec, gpointer data)
   Op *op = data;
   FpFingerStatusFlags st = fp_device_get_finger_status (FP_DEVICE (obj));
   xpc_object_t ev = xpc_dictionary_create (NULL, NULL, 0);
+
+  if (st & FP_FINGER_STATUS_PRESENT)
+    {
+      if (!op->present_since)
+        {
+          op->present_since = g_get_monotonic_time ();
+          op->lifted_at = 0;
+        }
+    }
+  else if (op->present_since && !op->lifted_at)
+    op->lifted_at = g_get_monotonic_time ();
 
   xpc_dictionary_set_string (ev, RK_KEY_EVENT, RK_EV_FINGER);
   xpc_dictionary_set_bool (ev, RK_KEY_PRESENT, (st & FP_FINGER_STATUS_PRESENT) != 0);
@@ -756,6 +796,10 @@ op_after_open (Op *op)
     case OP_AUTHORIZE: op_run_identify (op); break;
     case OP_DELETE:   fp_device_delete_print (op->dev, op->old_print, op->cancel, on_deleted, op); break;
     case OP_PURGE:    purge_next (op); break;
+    case OP_LISTEN:
+      op->present_since = op->lifted_at = 0;
+      fp_device_identify (op->dev, op->gallery, op->cancel, NULL, NULL, NULL, on_listen_identified, op);
+      break;
     }
 }
 
@@ -1051,6 +1095,134 @@ start_op (Request *r, OpKind kind)
 }
 
 /* ------------------------------------------------------------------------------------------ */
+/* finger actions: listen while the sensor is idle                                             */
+/*                                                                                            */
+/* No polling: the sensor waits for a finger in its own firmware and the USB transfer completes */
+/* when one lands. Any request that needs the sensor cancels the listener first (deferred).    */
+
+static xpc_connection_t agent_conn;     /* the verified agent of agent_uid, for action events */
+static uid_t            agent_uid = RK_NO_CONSOLE_USER;
+static guint            listen_timer;
+
+static void
+listen_stop (void)
+{
+  if (listen_timer)
+    {
+      g_source_remove (listen_timer);
+      listen_timer = 0;
+    }
+  if (current && current->kind == OP_LISTEN)
+    g_cancellable_cancel (current->cancel);
+}
+
+static gboolean
+listen_try (gpointer data)
+{
+  ConsoleState cs = console_get_state ();
+  struct passwd *pw;
+  FpDevice *dev;
+  Op *op;
+  g_autoptr(GPtrArray) rules = NULL;
+  g_autoptr(GPtrArray) gallery = NULL;
+
+  listen_timer = 0;
+  if (current || quitting || !g_queue_is_empty (&deferred))
+    return G_SOURCE_REMOVE;
+  if (cs.uid == RK_NO_CONSOLE_USER || cs.locked || !agent_conn || agent_uid != cs.uid)
+    return G_SOURCE_REMOVE;
+  rules = actions_load (cs.uid);
+  if (rules->len == 0)
+    return G_SOURCE_REMOVE;
+  gallery = store_load_user (cs.uid);
+  pw = getpwuid (cs.uid);
+  dev = pick_device ();
+  if (gallery->len == 0 || !pw || !dev)
+    return G_SOURCE_REMOVE;
+
+  op = g_new0 (Op, 1);
+  op->kind = OP_LISTEN;
+  op->uid = cs.uid;
+  op->username = g_strdup (pw->pw_name);
+  op->gallery = g_steal_pointer (&gallery);
+  op->rules = g_steal_pointer (&rules);
+  op->dev = dev;
+  op->cancel = g_cancellable_new ();
+  op->finger_handler = g_signal_connect (dev, "notify::finger-status", G_CALLBACK (on_finger_status), op);
+  current = op;
+  fp_device_open (dev, op->cancel, on_opened, op);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+listen_schedule (guint delay_ms)
+{
+  if (listen_timer)
+    g_source_remove (listen_timer);
+  listen_timer = g_timeout_add (delay_ms, listen_try, NULL);
+}
+
+static void
+send_action (Op *op, const RkRule *rule, double held, FpFinger finger)
+{
+  xpc_object_t ev;
+
+  if (!agent_conn || agent_uid != op->uid)
+    return;
+  ev = xpc_dictionary_create (NULL, NULL, 0);
+  xpc_dictionary_set_string (ev, RK_KEY_EVENT, RK_EV_ACTION);
+  xpc_dictionary_set_string (ev, RK_KEY_ACTION, rule->action);
+  if (rule->shortcut)
+    xpc_dictionary_set_string (ev, RK_KEY_SHORTCUT, rule->shortcut);
+  xpc_dictionary_set_string (ev, RK_KEY_FINGER, rk_finger_name (finger));
+  xpc_dictionary_set_string (ev, RK_KEY_GESTURE, rule->hold ? "hold" : "tap");
+  xpc_dictionary_set_double (ev, RK_KEY_HELD, held);
+  xpc_connection_send_message (agent_conn, ev);
+  xpc_release (ev);
+}
+
+static void
+on_listen_identified (GObject *src, GAsyncResult *res, gpointer data)
+{
+  Op *op = data;
+  GError *err = NULL;
+  g_autoptr(FpPrint) match = NULL;
+  g_autoptr(FpPrint) scanned = NULL;
+
+  if (!fp_device_identify_finish (FP_DEVICE (src), res, &match, &scanned, &err))
+    {
+      if (err->domain == FP_DEVICE_RETRY && !g_cancellable_is_cancelled (op->cancel))
+        {
+          g_error_free (err);           /* a smudge: just keep listening */
+          op->present_since = op->lifted_at = 0;
+          fp_device_identify (op->dev, op->gallery, op->cancel, NULL, NULL, NULL, on_listen_identified, op);
+          return;
+        }
+      if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+        listen_failures++;            /* back off below (e.g. the sensor went away in sleep) */
+      op_finish (op, err);
+      return;
+    }
+  listen_failures = 0;
+  if (match)
+    {
+      FpFinger finger = fp_print_get_finger (match);
+      gint64 end = op->lifted_at ? op->lifted_at : g_get_monotonic_time ();
+      double held = op->present_since ? (end - op->present_since) / (double) G_USEC_PER_SEC : 0.0;
+      const RkRule *rule = actions_pick (op->rules, finger, held);
+
+      if (rule)
+        {
+          g_message ("action: %s %s (%.1f s) -> %s%s%s", rule->hold ? "hold" : "tap",
+                     rk_finger_name (finger), held, rule->action,
+                     rule->shortcut ? " " : "", rule->shortcut ? rule->shortcut : "");
+          send_action (op, rule, held, finger);
+        }
+    }
+  op_finish (op, NULL);
+}
+
+/* ------------------------------------------------------------------------------------------ */
 /* immediate requests                                                                          */
 
 static void
@@ -1061,7 +1233,8 @@ do_status (Request *r)
 
   xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
   xpc_dictionary_set_string (reply, RK_KEY_VERSION, RK_VERSION);
-  xpc_dictionary_set_bool (reply, RK_KEY_BUSY, current != NULL);
+  xpc_dictionary_set_bool (reply, RK_KEY_BUSY, current != NULL && current->kind != OP_LISTEN);
+  xpc_dictionary_set_bool (reply, RK_KEY_LISTENING, current != NULL && current->kind == OP_LISTEN);
   xpc_dictionary_set_string (reply, RK_KEY_DEVICE, dev ? fp_device_get_name (dev) : "");
   if (dev)
     {
@@ -1164,6 +1337,12 @@ do_agent_hello (Request *r)
       return;
     }
   g_message ("agent verified: pid %d, uid %u", (int) pid, (unsigned) euid);
+  /* Keep this connection: finger actions are sent to the agent of the console user. */
+  if (agent_conn)
+    xpc_release (agent_conn);
+  agent_conn = xpc_retain (r->conn);
+  agent_uid = euid;
+  listen_schedule (1000);
   reply = reply_new (r);
   xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
   reply_send (r, reply);
@@ -1280,6 +1459,105 @@ do_authorize (Request *r)
 }
 
 static void
+do_actions_get (Request *r)
+{
+  uid_t uid;
+  g_autofree char *name = NULL;
+  g_autoptr(GPtrArray) rules = NULL;
+  xpc_object_t reply, arr;
+  guint i;
+
+  if (!resolve_user (r, &uid, &name))
+    return;
+  rules = actions_load (uid);
+  arr = xpc_array_create (NULL, 0);
+  for (i = 0; i < rules->len; i++)
+    {
+      const RkRule *rule = g_ptr_array_index (rules, i);
+      xpc_object_t d = xpc_dictionary_create (NULL, NULL, 0);
+
+      xpc_dictionary_set_string (d, RK_KEY_FINGER, rk_finger_name (rule->finger));
+      xpc_dictionary_set_string (d, RK_KEY_GESTURE, rule->hold ? "hold" : "tap");
+      xpc_dictionary_set_int64 (d, RK_KEY_SECONDS, rule->hold ? rule->seconds : 0);
+      xpc_dictionary_set_string (d, RK_KEY_ACTION, rule->action);
+      xpc_dictionary_set_string (d, RK_KEY_SHORTCUT, rule->shortcut ? rule->shortcut : "");
+      xpc_array_append_value (arr, d);
+      xpc_release (d);
+    }
+  reply = reply_new (r);
+  xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
+  xpc_dictionary_set_string (reply, RK_KEY_USER, name);
+  xpc_dictionary_set_value (reply, RK_KEY_ACTIONS, arr);
+  xpc_release (arr);
+  reply_send (r, reply);
+}
+
+static void
+do_actions_set (Request *r)
+{
+  uid_t uid;
+  g_autofree char *name = NULL;
+  g_autoptr(GPtrArray) rules = g_ptr_array_new_with_free_func ((GDestroyNotify) rk_rule_free);
+  g_autoptr(GError) err = NULL;
+  xpc_object_t arr, reply;
+  size_t i, n;
+
+  if (!resolve_user (r, &uid, &name))
+    return;
+  if (!require_trusted (r, "actions-set"))
+    return;
+  arr = xpc_dictionary_get_value (r->msg, RK_KEY_ACTIONS);
+  if (!arr || xpc_get_type (arr) != XPC_TYPE_ARRAY)
+    {
+      reply_error (r, RK_ERR_BAD_REQUEST, "missing \"actions\" array");
+      return;
+    }
+  n = xpc_array_get_count (arr);
+  if (n > RK_ACTIONS_MAX)
+    {
+      reply_error (r, RK_ERR_BAD_REQUEST, "at most %d finger actions", RK_ACTIONS_MAX);
+      return;
+    }
+  for (i = 0; i < n; i++)
+    {
+      xpc_object_t d = xpc_array_get_value (arr, i);
+      RkRule *rule = g_new0 (RkRule, 1);
+      const char *gesture = xpc_get_type (d) == XPC_TYPE_DICTIONARY ? xpc_dictionary_get_string (d, RK_KEY_GESTURE) : NULL;
+
+      if (xpc_get_type (d) == XPC_TYPE_DICTIONARY)
+        {
+          rule->finger = (FpFinger) rk_finger_from_name (xpc_dictionary_get_string (d, RK_KEY_FINGER));
+          rule->hold = gesture && strcmp (gesture, "hold") == 0;
+          rule->seconds = (guint) xpc_dictionary_get_int64 (d, RK_KEY_SECONDS);
+          rule->action = g_strdup (xpc_dictionary_get_string (d, RK_KEY_ACTION));
+          if (xpc_dictionary_get_string (d, RK_KEY_SHORTCUT) && *xpc_dictionary_get_string (d, RK_KEY_SHORTCUT))
+            rule->shortcut = g_strdup (xpc_dictionary_get_string (d, RK_KEY_SHORTCUT));
+        }
+      if ((gesture && strcmp (gesture, "tap") != 0 && strcmp (gesture, "hold") != 0) ||
+          !rk_rule_validate (rule, &err))
+        {
+          rk_rule_free (rule);
+          reply_error (r, RK_ERR_BAD_REQUEST, "rule %zu: %s", i + 1, err ? err->message : "unknown gesture");
+          return;
+        }
+      g_ptr_array_add (rules, rule);
+    }
+  if (!actions_save (uid, rules, &err))
+    {
+      reply_error (r, RK_ERR_STORAGE, "%s", err->message);
+      return;
+    }
+  g_message ("uid %u: %u finger action(s) set for %s", (unsigned) r->caller, rules->len, name);
+  /* restart the listener with the new rules */
+  listen_stop ();
+  listen_schedule (500);
+  reply = reply_new (r);
+  xpc_dictionary_set_bool (reply, RK_KEY_OK, true);
+  xpc_dictionary_set_string (reply, RK_KEY_USER, name);
+  reply_send (r, reply);
+}
+
+static void
 do_password_check (Request *r)
 {
   uid_t uid;
@@ -1343,7 +1621,7 @@ do_cancel (Request *r)
 {
   xpc_object_t reply;
 
-  if (!current || (current->req->conn != r->conn && r->caller != 0))
+  if (!current || !current->req || (current->req->conn != r->conn && r->caller != 0))
     {
       reply_error (r, RK_ERR_NOT_FOUND, "no operation of yours is running");
       return;
@@ -1360,6 +1638,18 @@ handle_request (gpointer data)
 {
   Request *r = data;
   const char *op = xpc_dictionary_get_string (r->msg, RK_KEY_OP);
+
+  /* Anything that needs the sensor interrupts the finger-action listener and runs right after. */
+  if (op && current && current->kind == OP_LISTEN &&
+      (strcmp (op, RK_OP_ENROLL) == 0 || strcmp (op, RK_OP_VERIFY) == 0 ||
+       strcmp (op, RK_OP_IDENTIFY) == 0 || strcmp (op, RK_OP_DELETE) == 0 ||
+       strcmp (op, RK_OP_PURGE) == 0 || strcmp (op, RK_OP_UNLOCK) == 0 ||
+       strcmp (op, RK_OP_AUTHORIZE) == 0))
+    {
+      g_queue_push_tail (&deferred, r);
+      g_cancellable_cancel (current->cancel);
+      return G_SOURCE_REMOVE;
+    }
 
   if (!op)
     reply_error (r, RK_ERR_BAD_REQUEST, "missing \"op\"");
@@ -1379,6 +1669,10 @@ handle_request (gpointer data)
     do_password_check (r);
   else if (strcmp (op, RK_OP_AGENT_HELLO) == 0)
     do_agent_hello (r);
+  else if (strcmp (op, RK_OP_ACTIONS_GET) == 0)
+    do_actions_get (r);
+  else if (strcmp (op, RK_OP_ACTIONS_SET) == 0)
+    do_actions_set (r);
   else if (strcmp (op, RK_OP_ENROLL) == 0)
     return (start_op (r, OP_ENROLL), G_SOURCE_REMOVE);
   else if (strcmp (op, RK_OP_VERIFY) == 0)
@@ -1406,10 +1700,17 @@ handle_peer_gone (gpointer data)
 {
   xpc_connection_t conn = data;
 
-  if (current && current->req->conn == conn)
+  if (current && current->req && current->req->conn == conn)
     {
       g_message ("client disconnected - cancelling %s", op_names[current->kind]);
       g_cancellable_cancel (current->cancel);
+    }
+  if (agent_conn == conn)
+    {
+      xpc_release (agent_conn);
+      agent_conn = NULL;
+      agent_uid = RK_NO_CONSOLE_USER;
+      listen_stop ();
     }
   xpc_release (conn);
   return G_SOURCE_REMOVE;
@@ -1457,6 +1758,11 @@ on_console_changed (const ConsoleState *cs, gpointer data)
 
   if (cs->locked || cs->uid != reuse.console)
     reuse_clear (cs->locked ? "screen locked" : "console user changed");
+  /* finger actions only while someone works at the unlocked console */
+  if (cs->locked || cs->uid == RK_NO_CONSOLE_USER)
+    listen_stop ();
+  else
+    listen_schedule (1000);
   if (cs->uid == RK_NO_CONSOLE_USER)
     g_message ("console: login window");
   else

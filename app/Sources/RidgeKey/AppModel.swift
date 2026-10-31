@@ -24,6 +24,25 @@ final class AppModel: ObservableObject {
     // sudo
     @Published var sudoEnabled = false
 
+    // finger actions (0.10)
+    struct FingerAction: Identifiable, Equatable {
+        var id = UUID()
+        var finger: String
+        var hold: Bool
+        var seconds: Int
+        var action: String          // "lock" | "shortcut"
+        var shortcut: String
+
+        /// Same rule = same content (ids are only for SwiftUI lists).
+        static func == (a: FingerAction, b: FingerAction) -> Bool {
+            a.finger == b.finger && a.hold == b.hold && (!a.hold || a.seconds == b.seconds)
+                && a.action == b.action && (a.action != "shortcut" || a.shortcut == b.shortcut)
+        }
+    }
+    @Published var actions: [FingerAction] = []
+    @Published var listening = false
+    @Published var actionsMessage = ""
+
     // admin dialogs
     @Published var adminEnabled = false
     @Published var adminMessage = ""
@@ -121,6 +140,7 @@ final class AppModel: ObservableObject {
         sensorID = status.string("device-id") ?? ""
         sensorDriver = status.string("driver") ?? ""
         consoleUser = status.string("console-user") ?? ""
+        listening = status.bool("listening")
 
         if reachable {
             let list = await RKClient.call(["op": "list"])
@@ -128,6 +148,14 @@ final class AppModel: ObservableObject {
             let pw = await RKClient.call(["op": "password-check"])
             passwordStored = pw.bool("password-stored")
             passwordValid = pw.bool("password-valid")
+            let a = await RKClient.call(["op": "actions-get"])
+            actions = ((a.fields["actions"] as? [Any]) ?? []).compactMap { item in
+                guard let d = item as? [String: Any], let f = d["finger"] as? String else { return nil }
+                return FingerAction(finger: f, hold: (d["gesture"] as? String) == "hold",
+                                    seconds: max(d["seconds"] as? Int ?? 2, 1),
+                                    action: d["action"] as? String ?? "lock",
+                                    shortcut: d["shortcut"] as? String ?? "")
+            }
         } else {
             fingers = []
             passwordStored = false
@@ -216,6 +244,24 @@ final class AppModel: ObservableObject {
         default:
             break
         }
+    }
+
+    // MARK: finger actions
+
+    func saveActions(_ list: [FingerAction]) async {
+        let rules: [Any] = list.map { a in
+            ["finger": a.finger, "gesture": a.hold ? "hold" : "tap", "seconds": a.hold ? a.seconds : 0,
+             "action": a.action, "shortcut": a.action == "shortcut" ? a.shortcut : ""] as [String: Any]
+        }
+        let r = await RKClient.call(["op": "actions-set", "actions": rules])
+        if r.ok {
+            actionsMessage = list.isEmpty ? "Finger actions off." : "✓ Saved \(list.count) finger action\(list.count == 1 ? "" : "s")."
+        } else if r.error == "untrusted-client" {
+            actionsMessage = "✗ Only the installed RidgeKey app may change this - reinstall RidgeKey."
+        } else {
+            actionsMessage = "✗ \(r.message)"
+        }
+        await refresh()
     }
 
     // MARK: lock-screen password

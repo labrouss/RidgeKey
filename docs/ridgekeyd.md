@@ -208,6 +208,28 @@ system.preferences  =  any 1 of:  is-root (if the original allowed root)
 **If admin dialogs ever misbehave:** `sudo ridgekey-admin disable` (sudo is not affected by
 this feature).
 
+## Finger actions
+
+```sh
+ridgekeyctl action add left-index tap lock                          # tap = lock the screen
+ridgekeyctl action add right-thumb hold 2 shortcut "Work mode"      # hold 2 s = run a Shortcut
+ridgekeyctl actions                                                 # list
+ridgekeyctl action remove right-thumb [tap|hold]     ridgekeyctl action clear
+```
+Or in the app: **Finger Actions**.
+
+- **When:** while you are logged in at the console, the screen is unlocked and the sensor is
+  idle. The sensor waits for a finger in its own firmware: no polling, ~0% CPU. sudo, the lock
+  screen, admin dialogs and the app always take the sensor first; listening resumes after.
+- **Tap / hold:** the time from "finger on" to "finger lifted". On the 840 G8's Synaptics reader
+  the match arrives after the lift, so a hold is measured exactly and the action runs on release.
+  The longest hold rule reached wins; otherwise the tap rule.
+- **Who acts:** ridgekeyd only matches your own enrolled fingers (Windows Hello / BIOS prints and
+  other people's fingers do nothing) and tells RidgeKey Agent; the agent locks the screen
+  (`SACLockScreenImmediate`, Ctrl-Cmd-Q as fallback) or runs `shortcuts run "<name>"` as you.
+- **Rules:** up to 20 per user in `/Library/Application Support/RidgeKey/actions/<uid>.conf`
+  (root, 0600), changed only through the installed `ridgekeyctl` / RidgeKey app.
+
 ## Permissions
 
 | Operation | Who |
@@ -217,6 +239,8 @@ this feature).
 | **enroll, delete** | the user, through a **trusted client**, after **confirming**: an already enrolled finger of theirs, or their login password. Root: anyone, no confirmation |
 | **password-set, password-clear** | the user, through a **trusted client** (set also checks the password); root for anyone |
 | password-check | the user; root for anyone |
+| actions-get | the user; root for anyone |
+| actions-set | the user, through a **trusted client**; root for anyone |
 | identify, purge | root only |
 | authorize | root only (the authorization plugin); console user present, screen unlocked |
 | unlock | the RidgeKey Agent only (path, signature, hardened runtime, root-owned) |

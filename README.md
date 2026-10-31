@@ -28,7 +28,8 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 | 4e | Stable local code signature, so Accessibility survives upgrades (`ridgekey-sign`) | ✅ 0.6.0: confirmed on the 840 G8 (reinstalls keep the certificate and the Accessibility grant) |
 | 4f | Admin password dialogs by fingerprint: `RidgeKey.bundle` authorization plugin + `ridgekey-admin` ([docs](docs/ridgekeyd.md#fingerprint-for-admin-dialogs)) | ✅ 0.7.0 tested on the 840 G8: Users & Groups unlocks with one touch (follow-ups reuse it), Use Password falls back |
 | 5 | **More readers**: all libfprint match-on-chip drivers, each audited for erase-all paths; installer reader check ([supported sensors](#supported-sensors)) | ✅ 0.8.0: package and reader check confirmed on the 840 G8 |
-| 6 | **Hardening**: enroll/delete need your password or an enrolled finger; only the installed ridgekeyctl / RidgeKey app (signatures recorded at install) may manage prints and the stored password; password lockout ([docs](docs/ridgekeyd.md#permissions)) | 🔧 0.9.0 |
+| 6 | **Hardening**: enroll/delete need your password or an enrolled finger; only the installed ridgekeyctl / RidgeKey app (signatures recorded at install) may manage prints and the stored password; password lockout ([docs](docs/ridgekeyd.md#permissions)) | ✅ 0.9.0: tested on the 840 G8 (finger and password confirmation, trusted clients) |
+| 7 | **Finger actions**: tap or hold an enrolled finger to lock the screen or run a Shortcut; idle listening without polling ([docs](docs/ridgekeyd.md#finger-actions)) | 🔧 0.10.0 |
 
 Why not an Authorization plugin for the lock screen? Since macOS 14 the lock screen uses its own
 modern UI. Getting a plugin to run there means reverting `system.login.screensaver` to the legacy

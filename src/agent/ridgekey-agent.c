@@ -14,7 +14,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dlfcn.h>
 #include <pwd.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -500,6 +503,100 @@ screen_locked_now (void)
   return is_locked;
 }
 
+/* ------------------------------------------------------------------------------------------ */
+/* finger actions (ridgekeyd decides, the agent performs them as the user)                     */
+
+extern char **environ;
+
+static void
+lock_screen_now (void)
+{
+  /* login.framework's SACLockScreenImmediate is what Ctrl-Cmd-Q and the menu use; private, so
+   * looked up at run time. Fallback: post Ctrl-Cmd-Q (needs Accessibility, which we have). */
+  static void *handle;
+  int (*sac_lock) (void) = NULL;
+
+  if (!handle)
+    handle = dlopen ("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login", RTLD_LAZY);
+  if (handle)
+    sac_lock = (int (*) (void)) dlsym (handle, "SACLockScreenImmediate");
+  if (sac_lock)
+    {
+      sac_lock ();
+      logf_ ("action: screen locked");
+      return;
+    }
+  {
+    CGEventSourceRef src = CGEventSourceCreate (kCGEventSourceStatePrivate);
+    CGEventRef down = CGEventCreateKeyboardEvent (src, (CGKeyCode) 12 /* Q */, true);
+    CGEventRef up = CGEventCreateKeyboardEvent (src, (CGKeyCode) 12, false);
+    CGEventFlags f = kCGEventFlagMaskCommand | kCGEventFlagMaskControl;
+
+    /* the one place a Command flag is used: a single explicit chord, released right away */
+    CGEventSetFlags (down, f);
+    CGEventSetFlags (up, f);
+    CGEventPost (kCGHIDEventTap, down);
+    CGEventPost (kCGHIDEventTap, up);
+    CFRelease (down);
+    CFRelease (up);
+    if (src)
+      CFRelease (src);
+    logf_ ("action: screen locked (Ctrl-Cmd-Q)");
+  }
+}
+
+static void
+run_shortcut (const char *name)
+{
+  char *const argv[] = { "/usr/bin/shortcuts", "run", (char *) name, NULL };
+  pid_t pid;
+  int rc = posix_spawn (&pid, argv[0], NULL, NULL, argv, environ);
+
+  if (rc == 0)
+    logf_ ("action: running Shortcut \"%s\" (pid %d)", name, (int) pid);
+  else
+    logf_ ("action: could not start shortcuts: %s", strerror (rc));
+  /* reap it in the background, whatever it takes */
+  if (rc == 0)
+    dispatch_async (dispatch_get_global_queue (QOS_CLASS_UTILITY, 0), ^{
+      int st;
+      waitpid (pid, &st, 0);
+    });
+}
+
+static void
+handle_action (xpc_object_t ev)
+{
+  const char *action = xpc_dictionary_get_string (ev, RK_KEY_ACTION);
+  const char *shortcut = xpc_dictionary_get_string (ev, RK_KEY_SHORTCUT);
+
+  if (locked || !action)
+    return;                       /* never act on the lock screen */
+  logf_ ("action: %s %s (%.1f s)", xpc_dictionary_get_string (ev, RK_KEY_GESTURE) ?: "?",
+         xpc_dictionary_get_string (ev, RK_KEY_FINGER) ?: "?", xpc_dictionary_get_double (ev, RK_KEY_HELD));
+  if (strcmp (action, "lock") == 0)
+    lock_screen_now ();
+  else if (strcmp (action, "shortcut") == 0 && shortcut && *shortcut)
+    run_shortcut (shortcut);
+}
+
+static void
+say_hello (void)
+{
+  xpc_object_t hello = xpc_dictionary_create (NULL, NULL, 0);
+
+  xpc_dictionary_set_string (hello, RK_KEY_OP, RK_OP_AGENT_HELLO);
+  xpc_connection_send_message_with_reply (conn, hello, q, ^(xpc_object_t reply) {
+    if (xpc_get_type (reply) != XPC_TYPE_DICTIONARY)
+      logf_ ("ridgekeyd not reachable yet");
+    else if (xpc_dictionary_get_bool (reply, RK_KEY_OK))
+      logf_ ("ridgekeyd accepted this agent");
+    else
+      logf_ ("ridgekeyd REFUSED this agent: %s", xpc_dictionary_get_string (reply, RK_KEY_MESSAGE));
+  });
+  xpc_release (hello);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -562,26 +659,24 @@ main (int argc, char **argv)
   conn = xpc_connection_create_mach_service (RK_SERVICE_NAME, q, XPC_CONNECTION_MACH_SERVICE_PRIVILEGED);
   xpc_connection_set_event_handler (conn, ^(xpc_object_t ev) {
     if (ev == XPC_ERROR_CONNECTION_INTERRUPTED)
-      logf_ ("ridgekeyd restarted");
+      {
+        /* ridgekeyd restarted: introduce ourselves again (finger actions are sent to us) */
+        logf_ ("ridgekeyd restarted");
+        dispatch_after (dispatch_time (DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), q, ^{ say_hello (); });
+      }
+    else if (xpc_get_type (ev) == XPC_TYPE_DICTIONARY)
+      {
+        const char *name = xpc_dictionary_get_string (ev, RK_KEY_EVENT);
+
+        if (name && strcmp (name, RK_EV_ACTION) == 0)
+          handle_action (ev);
+      }
   });
   xpc_connection_resume (conn);
 
   /* Ask ridgekeyd to check us now, so a signature/permission problem shows up in both logs
-   * at login instead of at the first lock. */
-  {
-    xpc_object_t hello = xpc_dictionary_create (NULL, NULL, 0);
-
-    xpc_dictionary_set_string (hello, RK_KEY_OP, RK_OP_AGENT_HELLO);
-    xpc_connection_send_message_with_reply (conn, hello, q, ^(xpc_object_t reply) {
-      if (xpc_get_type (reply) != XPC_TYPE_DICTIONARY)
-        logf_ ("ridgekeyd not reachable yet");
-      else if (xpc_dictionary_get_bool (reply, RK_KEY_OK))
-        logf_ ("ridgekeyd accepted this agent");
-      else
-        logf_ ("ridgekeyd REFUSED this agent: %s", xpc_dictionary_get_string (reply, RK_KEY_MESSAGE));
-    });
-    xpc_release (hello);
-  }
+   * at login instead of at the first lock. This also registers us for finger actions. */
+  say_hello ();
 
   dc = CFNotificationCenterGetDistributedCenter ();
   CFNotificationCenterAddObserver (dc, NULL, on_notification, CFSTR ("com.apple.screenIsLocked"),

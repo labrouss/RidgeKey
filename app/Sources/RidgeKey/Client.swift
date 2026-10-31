@@ -77,15 +77,7 @@ enum RKClient {
                 Task { @MainActor in onStart(op) }
             }
 
-            let msg = xpc_dictionary_create(nil, nil, 0)
-            for (key, value) in request {
-                switch value {
-                case let v as Bool: xpc_dictionary_set_bool(msg, key, v)
-                case let v as Int: xpc_dictionary_set_int64(msg, key, Int64(v))
-                case let v as String: xpc_dictionary_set_string(msg, key, v)
-                default: break
-                }
-            }
+            let msg = toXPC(request)
 
             xpc_connection_send_message_with_reply(connection, msg, queue) { reply in
                 let result: RKReply
@@ -97,6 +89,30 @@ enum RKClient {
                 xpc_connection_cancel(connection)
                 continuation.resume(returning: result)
             }
+        }
+    }
+
+    /// Bool, Int, Double, String, [Any] and nested [String: Any] (finger-action rules).
+    private static func toXPC(_ dict: [String: Any]) -> xpc_object_t {
+        let msg = xpc_dictionary_create(nil, nil, 0)
+        for (key, value) in dict {
+            if let v = toXPCValue(value) { xpc_dictionary_set_value(msg, key, v) }
+        }
+        return msg
+    }
+
+    private static func toXPCValue(_ value: Any) -> xpc_object_t? {
+        switch value {
+        case let v as Bool: return xpc_bool_create(v)
+        case let v as Int: return xpc_int64_create(Int64(v))
+        case let v as Double: return xpc_double_create(v)
+        case let v as String: return xpc_string_create(v)
+        case let v as [String: Any]: return toXPC(v)
+        case let v as [Any]:
+            let arr = xpc_array_create(nil, 0)
+            for item in v { if let x = toXPCValue(item) { xpc_array_append_value(arr, x) } }
+            return arr
+        default: return nil
         }
     }
 
@@ -114,6 +130,8 @@ enum RKClient {
         if type == XPC_TYPE_STRING, let p = xpc_string_get_string_ptr(value) { return String(cString: p) }
         if type == XPC_TYPE_BOOL { return xpc_bool_get_value(value) }
         if type == XPC_TYPE_INT64 { return Int(xpc_int64_get_value(value)) }
+        if type == XPC_TYPE_DOUBLE { return xpc_double_get_value(value) }
+        if type == XPC_TYPE_DICTIONARY { return toSwift(value) }
         if type == XPC_TYPE_ARRAY {
             var items: [Any] = []
             xpc_array_apply(value) { _, item in
