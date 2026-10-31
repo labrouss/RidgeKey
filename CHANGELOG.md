@@ -2,6 +2,12 @@
 
 All releases tested on the HP EliteBook 840 G8 (Synaptics 06cb:00f0, macOS Tahoe).
 
+## 1.0.0 - First production release
+- Everything from 0.1 – 0.10, tested together on the 840 G8: lock screen, admin dialogs, sudo,
+  finger actions and the RidgeKey app.
+- Documentation site with screenshots; README as a product page.
+- Releases are no longer marked pre-release; notes come from `.github/release-notes/`.
+
 ## 0.10.0 - Finger actions
 - Single, double or triple tap, or hold an enrolled finger for N seconds, to **lock the screen**
   or **run a Shortcut** (picked from your Shortcuts in the app).
