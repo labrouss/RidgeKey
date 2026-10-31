@@ -61,6 +61,9 @@ AG=/usr/local/ridgekey/bin/ridgekey-agent
 expect_rc 0 "agent runs" "$AG" --version
 expect_rc 0 "agent signature" codesign -dv "$AG"
 expect_out "runtime" "agent has the hardened runtime"
+expect_rc 0 "agent designated requirement" codesign -dr - "$AG"
+expect_out "certificate leaf" "agent signed with the local certificate (stable across upgrades)"
+LEAF1="$(codesign -dr - "$AG" 2>&1 | grep -o 'certificate leaf = H"[0-9a-f]*"' || true)"
 expect_rc 1 "unlock refused for ridgekeyctl (not the agent)" ridgekeyctl unlock
 expect_out "permission" "only the agent may unlock"
 expect_rc 1 "unlock refused for root too" sudo ridgekeyctl unlock
@@ -143,6 +146,12 @@ expect_rc 0 "sudo still works with the module in sudo_local" sudo -n true
 expect_rc 0 "enable again is a no-op" sudo ridgekey-sudo enable
 expect_out "already enabled" "idempotent"
 expect_rc 0 "upgrade in place while enabled" sudo "$B/install.sh"
+LEAF2="$(codesign -dr - "$AG" 2>&1 | grep -o 'certificate leaf = H"[0-9a-f]*"' || true)"
+if [ -n "$LEAF1" ] && [ "$LEAF1" = "$LEAF2" ]; then
+  pass "reinstall keeps the same signing certificate (Accessibility survives upgrades)"
+else
+  fail "signing certificate changed on reinstall: '$LEAF1' -> '$LEAF2'"
+fi
 expect_rc 0 "sudo still works after upgrade" sudo -n true
 
 echo "== daemon log (tail)"

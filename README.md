@@ -24,7 +24,7 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 | 4c | Stored password: checked, then kept in the System keychain (root only); lock-state tracking | ✅ 0.3.0 tested |
 | 4b | Lock screen: `ridgekey-agent` types the stored password into Apple's own lock screen after a match ([docs](docs/ridgekeyd.md#lock-screen-unlock)) | ✅ 0.4.3 tested: display on and asleep |
 | 4d | SwiftUI settings app and enrollment; Authorization plugin for admin password dialogs | planned |
-| 4e | Stable local code signature, so Accessibility survives upgrades | planned |
+| 4e | Stable local code signature, so Accessibility survives upgrades (`ridgekey-sign`) | 🔧 0.5.0 |
 
 Why not an Authorization plugin for the lock screen? Since macOS 14 the lock screen uses its own
 modern UI. Getting a plugin to run there means reverting `system.login.screensaver` to the legacy

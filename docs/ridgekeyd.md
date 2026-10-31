@@ -42,9 +42,8 @@ Add `-v` to see finger on/off events. Ctrl-C cancels. Exit code 3 = daemon not r
 
 1. `ridgekeyctl password set`: store your login password (see below).
 2. **System Settings → Privacy & Security → Accessibility** → enable **ridgekey-agent**
-   (`/usr/local/ridgekey/bin/ridgekey-agent`). After an upgrade, remove it with "−" and add it
-   again with "+"; the build is signed without a developer certificate, so macOS treats each
-   build as a new app.
+   (`/usr/local/ridgekey/bin/ridgekey-agent`). This is needed only once: `install.sh` signs the
+   agent with a local certificate, so later builds keep the permission (see below).
 3. Optional check: `/usr/local/ridgekey/bin/ridgekey-agent --type-test`, run from Terminal,
    types a sample (capitals, digits, symbols, an accented letter) into whatever app has focus,
    using the same code as the lock screen but without Return. Click into an empty TextEdit
@@ -78,6 +77,22 @@ Anything else, including `ridgekeyctl` and root itself, gets `permission`. Agent
 **Caveat:** with SIP disabled (common on hackintoshes), root and kernel extensions can get
 around these process checks. That doesn't matter much here, since root can read the System
 keychain anyway.
+
+### Local code signature
+
+macOS ties Accessibility to the agent's code signature. CI builds are ad-hoc signed, which would
+make every upgrade look like a new app. On each install, `ridgekey-sign` signs the agent with a
+**certificate created on your Mac** the first time:
+- **What it is:** self-signed, code-signing only, valid 20 years. Its key lives in
+  `/Library/Application Support/RidgeKey/signing.keychain-db`, root-only, and never leaves this
+  Mac.
+- **The signature:** hardened runtime, identifier `io.github.labrouss.ridgekey.agent`, and a
+  designated requirement naming that certificate. Every build therefore looks like the same app
+  to macOS.
+- **If signing fails,** the agent keeps the ad-hoc signature and still works; only the
+  Accessibility re-grant comes back. Check with `sudo ridgekey-sign status`.
+- `uninstall.sh --purge` deletes the certificate; a plain uninstall keeps it, so a reinstall
+  signs with the same identity.
 
 ## Lock-screen password
 
@@ -168,12 +183,11 @@ the `finger`, `enroll-progress` and `retry` events, reply fields, and error code
 `no-device`, `permission`, `not-found`, `no-prints`, `timeout`, `cancelled`, `data-full`, `storage`,
 `failed`, `bad-request`).
 
-## Known limitations (0.4.0)
+## Known limitations (0.5.0)
 
 - **Callers are identified by their effective uid** (`xpc_connection_get_euid`). A later version
   should check code signatures, for example to allow only the RidgeKey app to enroll.
 - **Enroll needs no password:** any process running as you can start an enrollment, but it still
   needs a finger on the sensor. The GUI will ask for your password first.
-- **Accessibility permission has to be granted again after every upgrade** (ad-hoc signing).
 - **The login window after a reboot (FileVault / first login) isn't covered;** that needs the
   password typed by hand once.

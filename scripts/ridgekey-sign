@@ -1,0 +1,137 @@
+#!/bin/bash
+# ridgekey-sign - sign ridgekey-agent with a stable, machine-local code-signing certificate.
+#
+# Why: macOS ties the Accessibility permission to the agent's code signature. CI builds are
+# ad-hoc signed (no certificate), so every upgrade looked like a new app and Accessibility had
+# to be granted again. Signed with the same local certificate, every build has the same
+# designated requirement (identifier + certificate), and the permission survives upgrades.
+#
+#   sudo ridgekey-sign sign [FILE]     create the certificate on first use, then sign FILE
+#                                      (default /usr/local/ridgekey/bin/ridgekey-agent)
+#   sudo ridgekey-sign status
+#   sudo ridgekey-sign remove          delete the certificate and its keychain (uninstall --purge)
+#
+# The certificate is self-signed, code-signing only, and created on this Mac. Its private key
+# lives in a separate keychain under /Library/Application Support/RidgeKey, readable only by
+# root (whoever is root could replace the agent anyway). It never leaves this machine.
+# On any failure the file keeps its existing (ad-hoc) signature: RidgeKey still works, you just
+# have to grant Accessibility again after upgrades.
+set -euo pipefail
+
+DIR="${RK_SIGN_DIR:-/Library/Application Support/RidgeKey}"
+KC="$DIR/signing.keychain-db"
+PWF="$DIR/signing.keychain.pw"
+CN="RidgeKey Local Code Signing"
+IDENT="io.github.labrouss.ridgekey.agent"
+TARGET="${2:-/usr/local/ridgekey/bin/ridgekey-agent}"
+
+TMPD=""
+cleanup() { [ -n "$TMPD" ] && rm -rf "$TMPD"; return 0; }
+trap cleanup EXIT
+die() { echo "ridgekey-sign: $*" >&2; exit 1; }
+[ "$(id -u)" = 0 ] || die "run with sudo"
+
+kc_unlock() { security unlock-keychain -p "$(cat "$PWF")" "$KC" >/dev/null 2>&1; }
+
+cert_hash() {
+  security find-certificate -c "$CN" -Z "$KC" 2>/dev/null | awk '/SHA-1 hash:/ {print $NF; exit}'
+}
+
+create_identity() {
+  local tmp pw
+  echo "    creating the local code-signing certificate (once per Mac)"
+  mkdir -p "$DIR"
+  chmod 755 "$DIR"
+  TMPD="$(mktemp -d)"
+  tmp="$TMPD"
+  chmod 700 "$tmp"
+
+  cat > "$tmp/req.cnf" <<EOF
+[req]
+distinguished_name = dn
+prompt             = no
+x509_extensions    = ext
+[dn]
+CN = $CN ($(scutil --get LocalHostName 2>/dev/null || hostname -s))
+[ext]
+basicConstraints     = critical,CA:false
+keyUsage             = critical,digitalSignature
+extendedKeyUsage     = critical,codeSigning
+subjectKeyIdentifier = hash
+EOF
+  /usr/bin/openssl req -x509 -newkey rsa:3072 -nodes -days 7300 -sha256 \
+    -config "$tmp/req.cnf" -keyout "$tmp/key.pem" -out "$tmp/cert.pem" >/dev/null 2>&1 \
+    || die "openssl could not create the certificate"
+  # 3DES/SHA1 PKCS#12: the format macOS `security import` reliably reads (LibreSSL's default;
+  # OpenSSL 3 would otherwise use AES/PBES2)
+  /usr/bin/openssl pkcs12 -export -inkey "$tmp/key.pem" -in "$tmp/cert.pem" \
+    -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
+    -name "$CN" -out "$tmp/id.p12" -passout pass:ridgekey >/dev/null 2>&1 \
+    || die "openssl could not package the certificate"
+
+  pw="$(/usr/bin/openssl rand -hex 32)"
+  ( umask 077; printf '%s' "$pw" > "$PWF" )
+  chown root:wheel "$PWF"
+  chmod 600 "$PWF"
+  rm -f "$KC"
+  security create-keychain -p "$pw" "$KC" >/dev/null
+  security set-keychain-settings "$KC"            # no auto-lock
+  kc_unlock
+  security import "$tmp/id.p12" -k "$KC" -P ridgekey -T /usr/bin/codesign >/dev/null \
+    || die "could not import the identity"
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pw" "$KC" >/dev/null 2>&1 || true
+  chown root:wheel "$KC"
+  chmod 600 "$KC"
+  rm -rf "$tmp"
+  TMPD=""
+  echo "    certificate $(cert_hash)"
+}
+
+do_sign() {
+  local hash
+  [ -f "$TARGET" ] || die "$TARGET not found"
+  if [ ! -f "$KC" ] || [ ! -f "$PWF" ] || ! kc_unlock || [ -z "$(cert_hash)" ]; then
+    create_identity
+  fi
+  kc_unlock || die "cannot unlock $KC"
+  hash="$(cert_hash)"
+  [ -n "$hash" ] || die "certificate not found in $KC"
+  if ! codesign --force --keychain "$KC" --sign "$hash" --options runtime --identifier "$IDENT" \
+         "$TARGET" >/dev/null 2>&1; then
+    # Some macOS versions refuse an untrusted self-signed identity: trust it for code
+    # signing only (admin trust settings; macOS may ask for your password once), then retry.
+    TMPD="$(mktemp -d)"
+    security find-certificate -c "$CN" -p "$KC" > "$TMPD/cert.pem"
+    security add-trusted-cert -d -r trustRoot -p codeSign -k "$KC" "$TMPD/cert.pem" >/dev/null 2>&1 || true
+    codesign --force --keychain "$KC" --sign "$hash" --options runtime --identifier "$IDENT" \
+      "$TARGET" >/dev/null 2>&1 || die "codesign failed (the file keeps its previous signature)"
+  fi
+  codesign --verify --strict "$TARGET" >/dev/null 2>&1 || die "signature does not verify"
+  codesign -dr - "$TARGET" 2>&1 | grep -q 'certificate leaf' || die "unexpected designated requirement"
+  echo "    signed $(basename "$TARGET") with the local certificate (${hash:0:12}...)"
+}
+
+do_status() {
+  if [ -f "$KC" ] && kc_unlock && [ -n "$(cert_hash)" ]; then
+    echo "local certificate: $(cert_hash)"
+  else
+    echo "local certificate: none"
+  fi
+  if [ -f "$TARGET" ]; then
+    echo "$(basename "$TARGET"):"
+    codesign -dr - "$TARGET" 2>&1 | sed -n 's/^designated => /  requirement: /p'
+    codesign -dv "$TARGET" 2>&1 | sed -n 's/^\(CodeDirectory.*flags=[^ ]*\).*/  \1/p'
+  fi
+}
+
+do_remove() {
+  rm -f "$KC" "$PWF"
+  echo "removed the local code-signing certificate"
+}
+
+case "${1:-status}" in
+  sign)   do_sign ;;
+  status) do_status ;;
+  remove) do_remove ;;
+  *)      echo "usage: ridgekey-sign sign [FILE] | status | remove"; exit 2 ;;
+esac

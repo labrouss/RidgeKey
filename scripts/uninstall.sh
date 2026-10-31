@@ -4,7 +4,8 @@
 #   (default)  stop and remove the daemon and binaries; keep the print record and the prints
 #              on the sensor (a reinstall picks them up again)
 #   --purge    first delete every RidgeKey print from the sensor, one by one, then remove the
-#              record and the stored lock-screen passwords (System keychain) too.
+#              record, the stored lock-screen passwords (System keychain) and the local
+#              code-signing certificate too.
 #              Windows Hello / BIOS prints are never touched.
 set -euo pipefail
 

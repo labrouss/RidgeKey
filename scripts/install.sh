@@ -48,6 +48,14 @@ install -m 755 "$SRC/ridgekey-sudo" "$DEST.new/bin/ridgekey-sudo"
 chown -R root:wheel "$DEST.new"
 chmod -R go-w "$DEST.new"
 chmod 444 "$DEST.new/lib/pam/pam_ridgekey.so"
+install -m 755 "$SRC/ridgekey-sign" "$DEST.new/bin/ridgekey-sign"
+# Stable local signature for the agent, so Accessibility survives upgrades (falls back to the
+# ad-hoc CI signature if anything goes wrong - the agent works either way).
+echo "==> Signing ridgekey-agent with the local certificate"
+RK_SIGN_STATUS=ok
+"$DEST.new/bin/ridgekey-sign" sign "$DEST.new/bin/ridgekey-agent" || {
+  RK_SIGN_STATUS=adhoc
+  echo "    kept the ad-hoc signature (Accessibility must be granted again after upgrades)"; }
 xattr -dr com.apple.quarantine "$DEST.new" 2>/dev/null || true
 # Swap in one step: if sudo_local already uses pam_ridgekey.so, the module path must never
 # be missing (OpenPAM fails the whole sudo stack when a listed module cannot be loaded).
@@ -94,6 +102,9 @@ echo "==> Status"
 /usr/local/bin/ridgekeyctl status || {
   echo "ridgekeyd did not answer - see /Library/Logs/RidgeKey/ridgekeyd.log"; exit 1; }
 
+if [ "$RK_SIGN_STATUS" = adhoc ]; then
+  echo "Note: ridgekey-agent kept its ad-hoc signature - re-grant Accessibility after upgrades."
+fi
 cat <<EOF
 
 Installed. Try (as your normal user, no sudo):
@@ -103,8 +114,9 @@ Installed. Try (as your normal user, no sudo):
 Fingerprint for sudo (optional, password still works):  sudo ridgekey-sudo enable
 Lock screen: 1) ridgekeyctl password set
              2) System Settings -> Privacy & Security -> Accessibility -> enable ridgekey-agent
-                (after an upgrade, remove it with "-" and add it again with "+"; it is in
-                 /usr/local/ridgekey/bin)
+                (it is in /usr/local/ridgekey/bin). With the local signature this is needed only
+                once; the first time after switching from 0.4.x, remove it with "-" and add it
+                again with "+".
              3) lock the screen (Ctrl-Cmd-Q) and touch the sensor
 Log: /Library/Logs/RidgeKey/ridgekeyd.log      Uninstall: sudo ./uninstall.sh [--purge]
 EOF
