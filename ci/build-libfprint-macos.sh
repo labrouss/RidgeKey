@@ -1,7 +1,7 @@
 #!/bin/bash
 # ci/build-libfprint-macos.sh - build RidgeKey for macOS: libfprint stack + ridgekeyd + ridgekeyctl
 #
-# Builds libusb + GLib + gusb + libfprint (synaptics driver only, patched) + RidgeKey (src/)
+# Builds libusb + GLib + gusb + libfprint (match-on-chip drivers, patched) + RidgeKey (src/)
 # on macOS x86_64 and packages a RELOCATABLE bundle:
 #   bin/ridgekeyd bin/ridgekeyctl                  the daemon and its client
 #   bin/{enroll,verify,identify,manage-prints}     libfprint examples (diagnostics)
@@ -44,6 +44,9 @@ GUSB_URL="https://github.com/hughsie/libgusb.git"
 LIBFPRINT_URL="https://gitlab.freedesktop.org/libfprint/libfprint.git"
 
 EXAMPLES="enroll verify identify manage-prints"   # never clear-storage
+# Match-on-chip drivers only (prints live on the sensor, like the 840 G8's Synaptics). Every one
+# is checked below for whole-store erase paths (patches/libfprint/0001 + 0004).
+DRIVERS="${DRIVERS:-synaptics,goodixmoc,elanmoc,fpcmoc,egismoc,focaltech_moc,realtek}"
 RK_VER="$(sed -n 's/^#define RK_VERSION *"\(.*\)"/\1/p' "$REPO/src/common/ridgekey-protocol.h")"
 [ -n "$RK_VER" ] || { echo "cannot read RK_VERSION from src/common/ridgekey-protocol.h"; exit 1; }
 BUNDLE_NAME="ridgekey-$RK_VER-macos-$ARCH"
@@ -122,7 +125,30 @@ apply_patches() {
     || die "SAFETY: DEL_FULL_DB guard missing in synaptics_sensor_cmd()"
   [ "$(grep -c 'synaptics_sensor_cmd (.*BMKT_CMD_DEL_FULL_DB' "$drv")" -le 1 ] \
     || die "SAFETY: new BMKT_CMD_DEL_FULL_DB senders in synaptics.c - review before building"
-  echo "    safety verified: clear_storage unregistered, 0x84 guard present, no other senders"
+  echo "    safety verified: synaptics - clear_storage unregistered, 0x84 guard present, no other senders"
+
+  # The other match-on-chip drivers (0004). No driver we ship may register clear_storage.
+  local d f
+  for d in $(echo "$DRIVERS" | tr ',' ' '); do
+    for f in "$src/libfprint/drivers/$d"/*.c; do
+      [ -f "$f" ] || die "SAFETY: driver $d not found in libfprint $LIBFPRINT_TAG"
+      grep -Eq '^[[:space:]]*dev_class->clear_storage[[:space:]]*=' "$f" \
+        && die "SAFETY: $d still registers clear_storage ($(basename "$f")) - review before building"
+    done
+  done
+  grep -q 'refusing to send goodixmoc DELETE_ALL' "$src/libfprint/drivers/goodixmoc/goodix.c" \
+    || die "SAFETY: goodixmoc DELETE_ALL guard missing"
+  grep -q 'FP_INIT_RESET_DEVICE);' "$src/libfprint/drivers/goodixmoc/goodix.c" \
+    && die "SAFETY: goodixmoc still wipes its store on open"
+  grep -q 'refusing to send FPC_CMD_DELETE_DB' "$src/libfprint/drivers/fpcmoc/fpc.c" \
+    || die "SAFETY: fpcmoc DELETE_DB guard missing"
+  grep -q 'refusing to build an egismoc delete-all' "$src/libfprint/drivers/egismoc/egismoc.c" \
+    || die "SAFETY: egismoc delete-all guard missing"
+  grep -q 'refusing to send the realtek delete-all' "$src/libfprint/drivers/realtek/realtek.c" \
+    || die "SAFETY: realtek delete-all guard missing"
+  [ "$(grep -c 'elanmoc_remove_all_cmd' "$src/libfprint/drivers/elanmoc/elanmoc.c")" = 0 ] \
+    || die "SAFETY: elanmoc now uses remove_all_cmd - review before building"
+  echo "    safety verified: goodixmoc, elanmoc, fpcmoc, egismoc, focaltech_moc, realtek - no whole-store erase"
 }
 
 # Make every Mach-O in a bundle reference siblings via @rpath; fail on any foreign dependency.
@@ -218,12 +244,22 @@ log "gusb $GUSB_TAG"
 fetch libgusb "$GUSB_URL" "$GUSB_TAG" GUSB_TAG
 build_meson gusb "$WORK/libgusb" docs=false introspection=false tests=false vapi=false
 
-log "libfprint $LIBFPRINT_TAG (synaptics only) + RidgeKey patches"
+log "libfprint $LIBFPRINT_TAG ($DRIVERS) + RidgeKey patches"
 fetch libfprint "$LIBFPRINT_URL" "$LIBFPRINT_TAG" LIBFPRINT_TAG
 apply_patches "$WORK/libfprint"
 build_meson libfprint "$WORK/libfprint" \
-  drivers=synaptics introspection=false udev_rules=disabled udev_hwdb=disabled \
+  drivers="$DRIVERS" introspection=false udev_rules=disabled udev_hwdb=disabled \
   gtk-examples=false doc=false installed-tests=false tod=false
+
+# Supported USB IDs of exactly the drivers built (libfprint's own tool): for the installer's
+# reader check, the app and the docs. "vvvv:pppp | Driver name" per line.
+SUPPORTED="$WORK/supported-devices.txt"
+"$WORK/libfprint/_build/libfprint/fprint-list-supported-devices" 2>/dev/null \
+  | grep -E '^[0-9a-f]{4}:[0-9a-f]{4} \| ' > "$SUPPORTED" || true
+[ -s "$SUPPORTED" ] || die "could not list the supported devices"
+grep -q '^06cb:00f0 ' "$SUPPORTED" || die "06cb:00f0 missing from the supported devices"
+echo "    $(wc -l < "$SUPPORTED" | tr -d ' ') supported USB readers:"
+cut -d'|' -f2 "$SUPPORTED" | sort | uniq -c | sed 's/^/     /'
 
 log "RidgeKey $RK_VER (ridgekeyd, ridgekeyctl)"
 rm -rf "$WORK/ridgekey-build"
@@ -348,6 +384,7 @@ echo "    RidgeKeyAgent.app: hardened runtime, system libraries only, icon: ${AG
 
 cp "$PATCHES"/*.patch "$BUNDLE/patches/"
 cp "$REPO/LICENSE" "$BUNDLE/LICENSE"
+cp "$SUPPORTED" "$BUNDLE/supported-devices.txt"
 license_copy "$WORK/libfprint" libfprint
 license_copy "$WORK/glib" glib
 license_copy "$WORK/libgusb" gusb
@@ -367,7 +404,10 @@ done
     echo "  $n  $(git -C "$WORK/$n" describe --tags --always 2>/dev/null) $(git -C "$WORK/$n" rev-parse HEAD) $(git -C "$WORK/$n" remote get-url origin)"
   done
   echo
-  echo "Safety: synaptics clear_storage unregistered; BMKT_CMD_DEL_FULL_DB (0x84) aborts if ever queued."
+  echo "Drivers: $DRIVERS ($(wc -l < "$SUPPORTED" | tr -d ' ') USB IDs, see supported-devices.txt)"
+  echo "Safety: no driver registers clear_storage; every whole-store erase command aborts if ever"
+  echo "        queued (synaptics 0x84, goodixmoc DELETE_ALL, fpcmoc DELETE_DB, egismoc, realtek);"
+  echo "        goodixmoc no longer wipes its store when the template list is unreadable."
   echo "        clear-storage example intentionally not included."
 } > "$BUNDLE/BUILDINFO.txt"
 

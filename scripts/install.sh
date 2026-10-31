@@ -131,8 +131,15 @@ if [ "$CONSOLE_UID" != 0 ]; then
 fi
 
 echo "==> Status"
-/usr/local/bin/ridgekeyctl status || {
+STATUS_OUT="$(/usr/local/bin/ridgekeyctl status)" || {
   echo "ridgekeyd did not answer - see /Library/Logs/RidgeKey/ridgekeyd.log"; exit 1; }
+echo "$STATUS_OUT"
+if echo "$STATUS_OUT" | grep -q 'sensor:   none found'; then
+  echo
+  echo "Note: no supported fingerprint reader is connected right now. RidgeKey supports these"
+  echo "      match-on-chip readers (and picks one up as soon as it is connected):"
+  [ -f "$SRC/supported-devices.txt" ] && cut -d'|' -f2 "$SRC/supported-devices.txt" | sort | uniq -c | sed 's/^/       /'
+fi
 
 # Upgrade with admin dialogs enabled: prove the new plugin loads, or switch the feature off
 # (a plugin macOS cannot load would break those dialogs instead of falling back).

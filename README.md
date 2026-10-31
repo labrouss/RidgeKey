@@ -27,6 +27,7 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 | 4d | **RidgeKey.app** (SwiftUI): status, enroll/delete with progress, lock-screen password, sudo toggle | ✅ 0.6.0 tested on the 840 G8 |
 | 4e | Stable local code signature, so Accessibility survives upgrades (`ridgekey-sign`) | ✅ 0.6.0: confirmed on the 840 G8 (reinstalls keep the certificate and the Accessibility grant) |
 | 4f | Admin password dialogs by fingerprint: `RidgeKey.bundle` authorization plugin + `ridgekey-admin` ([docs](docs/ridgekeyd.md#fingerprint-for-admin-dialogs)) | ✅ 0.7.0 tested on the 840 G8: Users & Groups unlocks with one touch (follow-ups reuse it), Use Password falls back |
+| 5 | **More readers**: all libfprint match-on-chip drivers, each audited for erase-all paths; installer reader check ([supported sensors](#supported-sensors)) | 🔧 0.8.0 |
 
 Why not an Authorization plugin for the lock screen? Since macOS 14 the lock screen uses its own
 modern UI. Getting a plugin to run there means reverting `system.login.screensaver` to the legacy
@@ -78,12 +79,27 @@ Details, permissions and the XPC API: [docs/ridgekeyd.md](docs/ridgekeyd.md).
 
 ## Supported sensors
 
-| Sensor | USB id | Laptop | Status |
-|---|---|---|---|
-| Synaptics Prometheus (FW 10.01.3478575) | 06cb:00f0 | HP EliteBook 840 G8 | ✅ enroll / verify / identify (libfprint examples) |
+RidgeKey builds libfprint's **match-on-chip** drivers: the prints live on the reader itself, as on
+the 840 G8. Every release lists the exact USB IDs in `supported-devices.txt`, and the installer
+warns when none of them is connected.
 
-Other Synaptics Prometheus readers supported by libfprint's `synaptics` driver should work the same
-way. Reports are welcome.
+| Driver | Vendor (USB vendor id) | Status |
+|---|---|---|
+| `synaptics` | Synaptics (06cb) | ✅ tested: 06cb:00f0, HP EliteBook 840 G8, FW 10.01.3478575 |
+| `goodixmoc` | Goodix (27c6) | untested - reports welcome |
+| `elanmoc` | Elan (04f3) | untested |
+| `fpcmoc` | FPC (10a5) | untested |
+| `egismoc` | Egis (1c7a) | untested |
+| `focaltech_moc` | FocalTech | untested |
+| `realtek` | Realtek (0bda) | untested |
+
+**Safety, for every driver:** the reader's whole print store is never erased - it may hold Windows
+Hello / BIOS prints. No driver registers libfprint's `clear_storage`, each driver's erase-all command
+aborts if it is ever queued, and goodixmoc no longer wipes its store when it cannot read its
+template list (upstream does). See `patches/libfprint/` - the build checks all of it.
+
+Find your reader's ID: Linux `lsusb`; Windows Device Manager → Biometric devices → Details →
+Hardware Ids; macOS `ioreg -p IOUSB -l -w0 | grep -E '"idVendor"|"idProduct"'` (decimal).
 
 ## License
 

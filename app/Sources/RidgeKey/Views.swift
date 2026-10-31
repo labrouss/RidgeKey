@@ -116,8 +116,17 @@ struct OverviewView: View {
                           detail: model.reachable ? "running \(model.version)" : "not running",
                           state: model.reachable ? .good : .warn)
                 StatusRow(title: "Sensor",
-                          detail: model.sensor.isEmpty ? "none found" : model.sensor,
+                          detail: model.sensor.isEmpty ? "no supported reader found" : model.sensor,
                           state: model.sensor.isEmpty ? .warn : .good)
+                if !model.sensor.isEmpty {
+                    LabeledContent("Reader", value: "\(model.sensorDriver) driver"
+                                   + (model.sensorID.isEmpty ? "" : " · \(model.sensorID)"))
+                    if model.sensorDriver != "synaptics" {
+                        Text("This reader's driver has not been tested with RidgeKey yet. If it works "
+                             + "(or not), please report it on GitHub with the reader ID above.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 LabeledContent("Logged-in user", value: model.consoleUser.isEmpty ? "-" : model.consoleUser)
             }
             Section("Set up") {
@@ -345,7 +354,8 @@ struct AboutView: View {
                 Link("github.com/labrouss/RidgeKey", destination: URL(string: "https://github.com/labrouss/RidgeKey")!)
             }
             Section {
-                Text("Fingerprint unlock for macOS on laptops with Synaptics match-in-sensor readers, "
+                Text("Fingerprint unlock for macOS on laptops with match-on-chip readers (Synaptics, "
+                     + "Goodix, Elan, FPC, Egis, FocalTech, Realtek), "
                      + "built on libfprint. MIT licensed; libfprint, GLib, gusb and libusb are LGPL. "
                      + "Not affiliated with Apple, Synaptics, HP or the libfprint project.")
                     .font(.footnote).foregroundStyle(.secondary)

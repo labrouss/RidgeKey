@@ -9,6 +9,8 @@ final class AppModel: ObservableObject {
     @Published var reachable = false
     @Published var version = ""
     @Published var sensor = ""
+    @Published var sensorID = ""      // vvvv:pppp
+    @Published var sensorDriver = ""
     @Published var consoleUser = ""
     @Published var refreshing = false
 
@@ -51,6 +53,8 @@ final class AppModel: ObservableObject {
         reachable = status.reachable && status.ok
         version = status.string("version") ?? ""
         sensor = status.string("device") ?? ""
+        sensorID = status.string("device-id") ?? ""
+        sensorDriver = status.string("driver") ?? ""
         consoleUser = status.string("console-user") ?? ""
 
         if reachable {

@@ -1,0 +1,152 @@
+From: RidgeKey (labrouss/RidgeKey)
+Subject: [PATCH 4/4] match-on-chip drivers: never erase the sensor's whole print store
+
+goodixmoc, fpcmoc, egismoc and realtek all have a command that deletes every
+print stored on the sensor - which may include Windows Hello / BIOS
+enrollments. RidgeKey only ever deletes single prints it created itself:
+
+- clear_storage is not registered (fp_device_clear_storage() returns
+  NOT_SUPPORTED), and each wipe command aborts the process if it is ever
+  queued (g_error).
+- goodixmoc: when the template list cannot be read at open, upstream wipes
+  the whole store without asking. Fail the open instead.
+
+elanmoc (remove_all_cmd defined but unused) and focaltech_moc (no wipe
+command) need no change; the build script checks that this stays true.
+
+License: LGPL-2.1-or-later (modifies libfprint).
+---
+--- a/libfprint/drivers/egismoc/egismoc.c	2026-10-31 13:13:58.043940056 +0200
++++ b/libfprint/drivers/egismoc/egismoc.c	2026-10-31 13:13:58.083960842 +0200
+@@ -547,6 +547,9 @@
+    */
+ 
+   int num_to_delete = 0;
++  /* ridgekey: only ever delete one given print. */
++  if (!delete_print)
++    g_error ("ridgekey: refusing to build an egismoc delete-all command (would erase every stored print)");
+   if (delete_print)
+     num_to_delete = 1;
+   else if (self->enrolled_ids)
+@@ -718,7 +721,7 @@
+     }
+ }
+ 
+-static void
++G_GNUC_UNUSED static void
+ egismoc_clear_storage (FpDevice *device)
+ {
+   fp_dbg ("Clear storage");
+@@ -1621,7 +1624,7 @@
+   dev_class->verify = egismoc_identify_verify;
+   dev_class->enroll = egismoc_enroll;
+   dev_class->delete = egismoc_delete;
+-  dev_class->clear_storage = egismoc_clear_storage;
++  /* ridgekey: clear_storage deliberately NOT registered (it deletes every enrolled print). */
+   dev_class->list = egismoc_list;
+ 
+   fpi_device_class_auto_initialize_features (dev_class);
+--- a/libfprint/drivers/fpcmoc/fpc.c	2026-10-31 13:13:58.031269383 +0200
++++ b/libfprint/drivers/fpcmoc/fpc.c	2026-10-31 13:13:58.083694679 +0200
+@@ -1412,6 +1412,7 @@
+             data.reserved = 8;
+             memcpy (&data.data[0], self->dbid, FPC_DB_ID_LEN);
+             cmd_data.cmdtype = FPC_CMDTYPE_TO_DEVICE;
++            g_error ("ridgekey: refusing to send FPC_CMD_DELETE_DB (would erase every stored print)");
+             cmd_data.request = FPC_CMD_DELETE_DB;
+             cmd_data.value = 0x0;
+             cmd_data.index = 0x0;
+@@ -1854,7 +1855,7 @@
+   fp_dbg ("%s exit <--", G_STRFUNC);
+ }
+ 
+-static void
++G_GNUC_UNUSED static void
+ fpc_dev_clear_storage (FpDevice *device)
+ {
+   FpiDeviceFpcMoc *self = FPI_DEVICE_FPCMOC (device);
+@@ -1898,7 +1899,7 @@
+   dev_class->identify =         fpc_dev_verify_identify;
+   dev_class->suspend =          fpc_dev_suspend;
+   dev_class->resume =           fpc_dev_resume;
+-  dev_class->clear_storage =    fpc_dev_clear_storage;
++  /* ridgekey: clear_storage deliberately NOT registered (FPC_CMD_DELETE_DB drops the whole DB). */
+   dev_class->cancel =           fpc_dev_cancel;
+ 
+   fpi_device_class_auto_initialize_features (dev_class);
+--- a/libfprint/drivers/goodixmoc/goodix.c	2026-10-31 13:13:58.014436129 +0200
++++ b/libfprint/drivers/goodixmoc/goodix.c	2026-10-31 13:13:58.083358215 +0200
+@@ -342,6 +342,10 @@
+ 
+   g_autoptr(FpiUsbTransfer) transfer = NULL;
+ 
++  /* ridgekey: hard stop - deleting the whole template store never reaches the sensor. */
++  if (cmd0 == MOC_CMD0_DELETETEMPLATE && cmd1 == MOC_CMD1_DELETE_ALL)
++    g_error ("ridgekey: refusing to send goodixmoc DELETE_ALL (would erase every stored print)");
++
+   CommandData *data = g_new0 (CommandData, 1);
+ 
+   transfer = alloc_cmd_transfer (FP_DEVICE (self), cmd0, cmd1, payload, payload_len);
+@@ -1064,9 +1068,14 @@
+ {
+   if (error)
+     {
++      /* ridgekey: upstream wipes the whole template store here, without asking. Fail the open
++       * instead; erasing prints is the user's decision (Windows / vendor tools). */
+       fp_warn ("Template storage appears to have been corrupted! Error was: %s", error->message);
+-      fp_warn ("A known reason for this to happen is a firmware bug triggered by another storage area being initialized.");
+-      fpi_ssm_jump_to_state (self->task_ssm, FP_INIT_RESET_DEVICE);
++      fpi_ssm_mark_failed (self->task_ssm,
++                           fpi_device_error_new_msg (FP_DEVICE_ERROR_DATA_INVALID,
++                                                     "the sensor's template list is unreadable; RidgeKey "
++                                                     "will not erase it - reset the sensor's storage with "
++                                                     "the vendor's tools if needed"));
+     }
+   else
+     {
+@@ -1606,7 +1615,7 @@
+ 
+ }
+ 
+-static void
++G_GNUC_UNUSED static void
+ gx_fp_template_delete_all (FpDevice *device)
+ {
+   FpiDeviceGoodixMoc *self = FPI_DEVICE_GOODIXMOC (device);
+@@ -1680,7 +1689,7 @@
+   dev_class->probe  = gx_fp_probe;
+   dev_class->enroll = gx_fp_enroll;
+   dev_class->delete = gx_fp_template_delete;
+-  dev_class->clear_storage = gx_fp_template_delete_all;
++  /* ridgekey: clear_storage deliberately NOT registered (DELETE_ALL erases every print). */
+   dev_class->list   = gx_fp_template_list;
+   dev_class->verify   = gx_fp_verify_identify;
+   dev_class->identify = gx_fp_verify_identify;
+--- a/libfprint/drivers/realtek/realtek.c	2026-10-31 13:13:58.057157991 +0200
++++ b/libfprint/drivers/realtek/realtek.c	2026-10-31 13:13:58.084247486 +0200
+@@ -1323,13 +1323,15 @@
+   fpi_ssm_start (self->task_ssm, fp_delete_ssm_done);
+ }
+ 
+-static void
++G_GNUC_UNUSED static void
+ clear_storage (FpDevice *device)
+ {
+   FpiDeviceRealtek *self = FPI_DEVICE_REALTEK (device);
+   guint8 *cmd_buf = NULL;
+ 
+   G_DEBUG_HERE ();
++  /* ridgekey: delete-record with index 0xff erases every stored print. */
++  g_error ("ridgekey: refusing to send the realtek delete-all record command");
+   co_delete_record.param[0] = 0xff;
+   cmd_buf = (guint8 *) &co_delete_record;
+   rtk_sensor_bulk_cmd (self, cmd_buf, NULL, FP_RTK_MSG_DEFAULT, 0, fp_clear_storage_cb);
+@@ -1377,7 +1379,7 @@
+   dev_class->identify = identify_verify;
+   dev_class->enroll = enroll;
+   dev_class->delete = delete_print;
+-  dev_class->clear_storage = clear_storage;
++  /* ridgekey: clear_storage deliberately NOT registered (delete record 0xff erases every print). */
+   dev_class->list = list_print;
+ 
+   fpi_device_class_auto_initialize_features (dev_class);

@@ -32,7 +32,9 @@ cp -a "$B/." "$T/root/$STAGE/"
 pkgbuild --analyze --root "$T/root" "$T/components.plist" >/dev/null
 n=0
 while /usr/libexec/PlistBuddy -c "Print :$n" "$T/components.plist" >/dev/null 2>&1; do
-  /usr/libexec/PlistBuddy -c "Set :$n:BundleIsRelocatable false" "$T/components.plist"
+  # not every entry carries the key, so remove-then-add instead of Set
+  /usr/libexec/PlistBuddy -c "Delete :$n:BundleIsRelocatable" "$T/components.plist" >/dev/null 2>&1 || true
+  /usr/libexec/PlistBuddy -c "Add :$n:BundleIsRelocatable bool false" "$T/components.plist"
   /usr/libexec/PlistBuddy -c "Set :$n:BundleOverwriteAction upgrade" "$T/components.plist" 2>/dev/null || true
   n=$((n + 1))
 done
@@ -77,6 +79,17 @@ Log: /Library/Logs/RidgeKey/ridgekeyd.log
 EOF
 cp "$B/LICENSE" "$T/res/license.txt" 2>/dev/null || true
 
+# Reader check (a warning only - you can install before plugging in a USB reader). The IDs come
+# from the drivers this build contains (supported-devices.txt, written by the build).
+IDS=""
+if [ -f "$B/supported-devices.txt" ]; then
+  IDS="$(sed -n 's/^\([0-9a-f]\{4\}\):\([0-9a-f]\{4\}\) .*/"\1:\2"/p' "$B/supported-devices.txt" | paste -sd, -)"
+fi
+CHECK=""
+if [ -n "$IDS" ]; then
+  CHECK='<installation-check script="rkReaderCheck()"/>'
+fi
+
 cat > "$T/distribution.xml" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
@@ -89,6 +102,34 @@ cat > "$T/distribution.xml" <<EOF
   <volume-check>
     <allowed-os-versions><os-version min="13.0"/></allowed-os-versions>
   </volume-check>
+  $CHECK
+  <script><![CDATA[
+var rkSupported = [$IDS];
+function rkHex(n) { var h = (Number(n) & 0xffff).toString(16); while (h.length < 4) h = "0" + h; return h; }
+function rkReaderCheck() {
+  try {
+    var classes = ["IOUSBHostDevice", "IOUSBDevice"];
+    for (var c = 0; c < classes.length; c++) {
+      var devs = system.ioregistry.matchingClass(classes[c]) || [];
+      for (var i = 0; i < devs.length; i++) {
+        var d = devs[i];
+        if (d["idVendor"] === undefined || d["idProduct"] === undefined) continue;
+        var id = rkHex(d["idVendor"]) + ":" + rkHex(d["idProduct"]);
+        if (rkSupported.indexOf(id) >= 0) { system.log("RidgeKey: supported reader " + id); return true; }
+      }
+    }
+  } catch (e) {
+    system.log("RidgeKey: reader check skipped: " + e);
+    return true;
+  }
+  my.result.type = "Warn";
+  my.result.title = "No supported fingerprint reader found";
+  my.result.message = "RidgeKey supports match-on-chip readers from Synaptics, Goodix, Elan, FPC, " +
+    "Egis, FocalTech and Realtek (" + rkSupported.length + " models). None is connected right now. " +
+    "You can install anyway: RidgeKey starts using a supported reader as soon as one is connected.";
+  return false;
+}
+]]></script>
   <choices-outline><line choice="default"/></choices-outline>
   <choice id="default" title="RidgeKey"><pkg-ref id="$ID.pkg"/></choice>
   <pkg-ref id="$ID.pkg" version="$VER" onConclusion="none">ridgekey-component.pkg</pkg-ref>
