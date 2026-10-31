@@ -140,6 +140,10 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --prerelease \
             --title "RidgeKey for macOS - $GITHUB_REF_NAME" \
-            --notes "RidgeKey test build for macOS x86_64: ridgekeyd + ridgekeyctl + installer.
+            --notes "RidgeKey for macOS (Intel, macOS 13+).
+
+          **Install:** download RidgeKey-*.pkg and open it. It is not signed with an Apple Developer ID, so the first time: right-click -> Open (or System Settings -> Privacy & Security -> Open Anyway).
+          Terminal alternative: the .tar.gz, then sudo ./install.sh.
+
           Sensor-wipe command (BMKT_CMD_DEL_FULL_DB) is disabled in this build.
           See BUILDINFO.txt inside for exact sources; patches/ holds the LGPL-2.1 modifications."

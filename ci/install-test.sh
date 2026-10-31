@@ -238,6 +238,25 @@ expect_rc 0 "sudo works after uninstall" sudo -n true
 [ ! -e /usr/local/ridgekey ] && pass "files removed" || fail "/usr/local/ridgekey still there"
 if sudo launchctl print system/io.github.labrouss.ridgekey >/dev/null 2>&1; then fail "launchd job still loaded"; else pass "launchd job gone"; fi
 
+echo "== double-click installer (.pkg)"
+PKG="$(ls "$(dirname "$TARBALL")"/RidgeKey-*.pkg 2>/dev/null | head -1)"
+if [ -n "$PKG" ]; then
+  expect_rc 0 "pkg lists its payload" pkgutil --payload-files "$PKG"
+  expect_out "Installer/.*/install.sh" "pkg carries the bundle"
+  expect_rc 0 "installer -pkg (fresh install)" sudo installer -pkg "$PKG" -target /
+  expect_rc 0 "daemon answers after pkg install" ridgekeyctl status
+  [ -d /Applications/RidgeKey.app ] && pass "app installed by the pkg" || fail "app missing after pkg install"
+  [ -d /usr/local/ridgekey/RidgeKeyAgent.app ] && pass "agent installed by the pkg" || fail "agent missing after pkg install"
+  expect_rc 0 "installer -pkg again (upgrade in place)" sudo installer -pkg "$PKG" -target /
+  expect_rc 0 "daemon answers after pkg upgrade" ridgekeyctl status
+  U="$(ls -d "/Library/Application Support/RidgeKey/Installer/"*/uninstall.sh 2>/dev/null | head -1)"
+  [ -n "$U" ] && pass "staged uninstaller present" || fail "no staged uninstall.sh"
+  expect_rc 0 "uninstall via the staged uninstaller" sudo "$U" --purge
+  [ ! -e /usr/local/ridgekey ] && pass "pkg install removed cleanly" || fail "files left after uninstall"
+else
+  fail "no RidgeKey-*.pkg next to $TARBALL"
+fi
+
 echo
 if [ "$FAILS" -ne 0 ]; then echo "$FAILS check(s) FAILED"; exit 1; fi
 echo "all install checks passed"

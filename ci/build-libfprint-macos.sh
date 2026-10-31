@@ -347,6 +347,7 @@ codesign -dv "$AA" 2>&1 | grep -q 'flags=.*runtime' || die "RidgeKeyAgent.app la
 echo "    RidgeKeyAgent.app: hardened runtime, system libraries only, icon: ${AGENT_ICON_KEY:+yes}"
 
 cp "$PATCHES"/*.patch "$BUNDLE/patches/"
+cp "$REPO/LICENSE" "$BUNDLE/LICENSE"
 license_copy "$WORK/libfprint" libfprint
 license_copy "$WORK/glib" glib
 license_copy "$WORK/libgusb" gusb
@@ -438,8 +439,13 @@ fi
 
 log "Package"
 tar -C "$WORK/bundle" -czf "$DIST/$BUNDLE_NAME.tar.gz" "$BUNDLE_NAME"
-( cd "$DIST" && shasum -a 256 "$BUNDLE_NAME.tar.gz" > "$BUNDLE_NAME.tar.gz.sha256" )
+# Double-click installer: same bundle, runs the same install.sh from its postinstall.
+PKG_NAME="RidgeKey-$RK_VER.pkg"
+bash "$REPO/scripts/build-pkg.sh" "$BUNDLE" "$DIST/$PKG_NAME" "$RK_VER" || die "building $PKG_NAME failed"
+( cd "$DIST" && shasum -a 256 "$BUNDLE_NAME.tar.gz" "$PKG_NAME" > "ridgekey-$RK_VER.sha256" )
+rm -f "$DIST/$BUNDLE_NAME.tar.gz.sha256"
 gh_endgroup
 echo
-echo "Done: $DIST/$BUNDLE_NAME.tar.gz"
-cat "$DIST/$BUNDLE_NAME.tar.gz.sha256"
+echo "Done: $DIST/$PKG_NAME"
+echo "      $DIST/$BUNDLE_NAME.tar.gz"
+cat "$DIST/ridgekey-$RK_VER.sha256"
