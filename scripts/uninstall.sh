@@ -50,7 +50,7 @@ rm -f "/Library/LaunchAgents/$AGENT.plist"
 echo "==> Stopping and removing the daemon"
 launchctl bootout "system/$LABEL" 2>/dev/null || true
 rm -f "$PLIST"
-rm -rf "$DEST"
+rm -rf "$DEST" /Applications/RidgeKey.app
 for l in ridgekeyctl ridgekey-sudo; do [ -L "/usr/local/bin/$l" ] && rm -f "/usr/local/bin/$l"; done
 
 if [ $PURGE = 1 ]; then

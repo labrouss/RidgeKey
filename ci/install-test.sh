@@ -56,6 +56,10 @@ expect_rc 2 "unknown finger rejected by client" ridgekeyctl enroll left-toe
 expect_rc 0 "purge with nothing recorded" sudo ridgekeyctl purge --yes
 expect_out "deleted 0" "purge deletes nothing"
 
+echo "== RidgeKey.app"
+expect_rc 0 "app installed and starts (--version)" /Applications/RidgeKey.app/Contents/MacOS/RidgeKey --version
+expect_out "RidgeKey" "app reports its version"
+
 echo "== lock-screen agent"
 AG=/usr/local/ridgekey/bin/ridgekey-agent
 expect_rc 0 "agent runs" "$AG" --version

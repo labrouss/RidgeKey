@@ -1,7 +1,7 @@
 # RidgeKey - daemon and command-line client
 # SPDX-License-Identifier: MIT
 project('ridgekey', 'c',
-  version: '0.5.0',
+  version: '0.6.0',
   license: 'MIT',
   meson_version: '>= 0.59.0',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=debugoptimized'])

@@ -8,3 +8,5 @@ build/
 test-storage.variant
 # Linux reference captures contain finger/user IDs - keep them out of the repo
 synaptics-capture-*/
+app/.build/
+app/build/

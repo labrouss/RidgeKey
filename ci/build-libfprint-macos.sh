@@ -264,6 +264,10 @@ done
 nm -gU "$BUNDLE/lib/pam/pam_ridgekey.so" | grep -q '_pam_sm_authenticate$' || die "pam_sm_authenticate not exported"
 echo "    pam_ridgekey.so: system libraries only, pam_sm_authenticate exported"
 
+log "RidgeKey.app (SwiftUI)"
+run bash "$REPO/scripts/build-app.sh" "$BUNDLE/RidgeKey.app"
+"$BUNDLE/RidgeKey.app/Contents/MacOS/RidgeKey" --version || die "RidgeKey.app does not start"
+
 cp "$PATCHES"/*.patch "$BUNDLE/patches/"
 license_copy "$WORK/libfprint" libfprint
 license_copy "$WORK/glib" glib

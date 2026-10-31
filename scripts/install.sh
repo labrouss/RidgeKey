@@ -65,6 +65,13 @@ else
   mv "$DEST.new" "$DEST"
 fi
 
+if [ -d "$SRC/RidgeKey.app" ]; then
+  echo "==> Installing RidgeKey.app to /Applications"
+  rm -rf /Applications/RidgeKey.app
+  cp -R "$SRC/RidgeKey.app" /Applications/
+  xattr -dr com.apple.quarantine /Applications/RidgeKey.app 2>/dev/null || true
+fi
+
 mkdir -p /usr/local/bin
 ln -sf "$DEST/bin/ridgekeyctl" /usr/local/bin/ridgekeyctl
 ln -sf "$DEST/bin/ridgekey-sudo" /usr/local/bin/ridgekey-sudo
@@ -107,7 +114,7 @@ if [ "$RK_SIGN_STATUS" = adhoc ]; then
 fi
 cat <<EOF
 
-Installed. Try (as your normal user, no sudo):
+Installed. Open the RidgeKey app (Applications), or use the command line (no sudo):
   ridgekeyctl enroll right-index
   ridgekeyctl verify
   ridgekeyctl list

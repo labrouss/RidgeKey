@@ -23,7 +23,8 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 | 4a | `sudo` with fingerprint: `pam_ridgekey.so` + `ridgekey-sudo` ([docs](docs/ridgekeyd.md#fingerprint-for-sudo)) | ✅ 0.2.0 tested: match, wrong finger, Ctrl-C |
 | 4c | Stored password: checked, then kept in the System keychain (root only); lock-state tracking | ✅ 0.3.0 tested |
 | 4b | Lock screen: `ridgekey-agent` types the stored password into Apple's own lock screen after a match ([docs](docs/ridgekeyd.md#lock-screen-unlock)) | ✅ 0.4.3 tested: display on and asleep |
-| 4d | SwiftUI settings app and enrollment; Authorization plugin for admin password dialogs | planned |
+| 4d | **RidgeKey.app** (SwiftUI): status, enroll/delete with progress, lock-screen password, sudo toggle | 🔧 0.6.0 first version |
+| 4f | Authorization plugin for admin password dialogs | planned |
 | 4e | Stable local code signature, so Accessibility survives upgrades (`ridgekey-sign`) | 🔧 0.5.0: signing confirmed on the 840 G8; upgrade test pending |
 
 Why not an Authorization plugin for the lock screen? Since macOS 14 the lock screen uses its own
@@ -41,7 +42,8 @@ Tahoe.
    xattr -dr com.apple.quarantine .     # only if downloaded with a browser
    sudo ./install.sh
    ```
-3. Use (no sudo):
+3. Open **RidgeKey** from Applications to enroll fingers, store the lock-screen password and turn
+   on fingerprint for sudo. Or use the command line (no sudo):
    ```sh
    ridgekeyctl enroll right-index
    ridgekeyctl verify        # exit code 0 = match
