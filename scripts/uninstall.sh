@@ -29,6 +29,15 @@ if [ -f /etc/pam.d/sudo_local ] && grep -q 'pam_ridgekey\.so' /etc/pam.d/sudo_lo
   grep -q 'pam_ridgekey\.so' /etc/pam.d/sudo_local && { echo "Could not remove pam_ridgekey from sudo_local - aborting"; exit 1; }
 fi
 
+# Then restore the normal admin dialogs, BEFORE the plugin disappears (authd cannot fall back
+# to the password when a plugin listed in a rule is missing).
+if ls "$DATA/authdb/"*.plist >/dev/null 2>&1; then
+  echo "==> Restoring the normal admin dialogs"
+  ADMIN="$DEST/bin/ridgekey-admin"; [ -x "$ADMIN" ] || ADMIN="$(cd "$(dirname "$0")" && pwd)/ridgekey-admin"
+  [ -x "$ADMIN" ] || { echo "ridgekey-admin not found - cannot restore the admin rules; aborting"; exit 1; }
+  "$ADMIN" disable || { echo "Could not restore every admin rule - aborting (nothing removed)"; exit 1; }
+fi
+
 if [ $PURGE = 1 ]; then
   if launchctl print "system/$LABEL" >/dev/null 2>&1 && [ -x "$DEST/bin/ridgekeyctl" ]; then
     echo "==> Deleting RidgeKey prints from the sensor"
@@ -50,8 +59,8 @@ rm -f "/Library/LaunchAgents/$AGENT.plist"
 echo "==> Stopping and removing the daemon"
 launchctl bootout "system/$LABEL" 2>/dev/null || true
 rm -f "$PLIST"
-rm -rf "$DEST" /Applications/RidgeKey.app
-for l in ridgekeyctl ridgekey-sudo; do [ -L "/usr/local/bin/$l" ] && rm -f "/usr/local/bin/$l"; done
+rm -rf "$DEST" /Applications/RidgeKey.app /Library/Security/SecurityAgentPlugins/RidgeKey.bundle
+for l in ridgekeyctl ridgekey-sudo ridgekey-admin; do [ -L "/usr/local/bin/$l" ] && rm -f "/usr/local/bin/$l"; done
 
 if [ $PURGE = 1 ]; then
   n=0

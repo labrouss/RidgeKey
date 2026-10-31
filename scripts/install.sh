@@ -8,6 +8,8 @@
 #                                                       'sudo ridgekey-sudo enable' for that)
 #   /Library/LaunchDaemons/io.github.labrouss.ridgekey.plist
 #   /Library/LaunchAgents/io.github.labrouss.ridgekey.agent.plist   lock-screen agent (per user)
+#   /Library/Security/SecurityAgentPlugins/RidgeKey.bundle   admin-dialog plugin (admin dialogs are
+#                                                       NOT changed - 'sudo ridgekey-admin enable')
 #   /Library/Logs/RidgeKey/                             daemon log
 #   /Library/Application Support/RidgeKey/prints/       print record (created by the daemon, 0700)
 # Re-running upgrades in place; the print record is kept.
@@ -45,6 +47,7 @@ cp -R "$SRC/bin" "$SRC/lib" "$DEST.new/"
 [ -d "$SRC/licenses" ] && cp -R "$SRC/licenses" "$DEST.new/"
 cp "$SRC/BUILDINFO.txt" "$DEST.new/" 2>/dev/null || true
 install -m 755 "$SRC/ridgekey-sudo" "$DEST.new/bin/ridgekey-sudo"
+[ -f "$SRC/ridgekey-admin" ] && install -m 755 "$SRC/ridgekey-admin" "$DEST.new/bin/ridgekey-admin"
 chown -R root:wheel "$DEST.new"
 chmod -R go-w "$DEST.new"
 chmod 444 "$DEST.new/lib/pam/pam_ridgekey.so"
@@ -75,6 +78,27 @@ fi
 mkdir -p /usr/local/bin
 ln -sf "$DEST/bin/ridgekeyctl" /usr/local/bin/ridgekeyctl
 ln -sf "$DEST/bin/ridgekey-sudo" /usr/local/bin/ridgekey-sudo
+[ -x "$DEST/bin/ridgekey-admin" ] && ln -sf "$DEST/bin/ridgekey-admin" /usr/local/bin/ridgekey-admin
+
+AUTH_PLUGINS=/Library/Security/SecurityAgentPlugins
+if [ -d "$SRC/RidgeKey.bundle" ]; then
+  echo "==> Installing the admin-dialog plugin to $AUTH_PLUGINS"
+  mkdir -p "$AUTH_PLUGINS"
+  rm -rf "$AUTH_PLUGINS/RidgeKey.bundle.new"
+  cp -R "$SRC/RidgeKey.bundle" "$AUTH_PLUGINS/RidgeKey.bundle.new"
+  chown -R root:wheel "$AUTH_PLUGINS/RidgeKey.bundle.new"
+  chmod -R go-w "$AUTH_PLUGINS/RidgeKey.bundle.new"
+  xattr -dr com.apple.quarantine "$AUTH_PLUGINS/RidgeKey.bundle.new" 2>/dev/null || true
+  # Swap quickly: while admin rights use the plugin it must not be missing for long.
+  if [ -d "$AUTH_PLUGINS/RidgeKey.bundle" ]; then
+    rm -rf "$AUTH_PLUGINS/RidgeKey.bundle.old"
+    mv "$AUTH_PLUGINS/RidgeKey.bundle" "$AUTH_PLUGINS/RidgeKey.bundle.old"
+    mv "$AUTH_PLUGINS/RidgeKey.bundle.new" "$AUTH_PLUGINS/RidgeKey.bundle"
+    rm -rf "$AUTH_PLUGINS/RidgeKey.bundle.old"
+  else
+    mv "$AUTH_PLUGINS/RidgeKey.bundle.new" "$AUTH_PLUGINS/RidgeKey.bundle"
+  fi
+fi
 
 mkdir -p /Library/Logs/RidgeKey
 chmod 755 /Library/Logs/RidgeKey
@@ -109,6 +133,16 @@ echo "==> Status"
 /usr/local/bin/ridgekeyctl status || {
   echo "ridgekeyd did not answer - see /Library/Logs/RidgeKey/ridgekeyd.log"; exit 1; }
 
+# Upgrade with admin dialogs enabled: prove the new plugin loads, or switch the feature off
+# (a plugin macOS cannot load would break those dialogs instead of falling back).
+if [ -x "$DEST/bin/ridgekey-admin" ] && ls "/Library/Application Support/RidgeKey/authdb/"*.plist >/dev/null 2>&1; then
+  echo "==> Admin dialogs by fingerprint are enabled - checking the new plugin"
+  if ! "$DEST/bin/ridgekey-admin" selftest; then
+    echo "    WARNING: the plugin failed its self-test - restoring the normal admin dialogs"
+    "$DEST/bin/ridgekey-admin" disable || true
+  fi
+fi
+
 if [ "$RK_SIGN_STATUS" = adhoc ]; then
   echo "Note: ridgekey-agent kept its ad-hoc signature - re-grant Accessibility after upgrades."
 fi
@@ -119,6 +153,7 @@ Installed. Open the RidgeKey app (Applications), or use the command line (no sud
   ridgekeyctl verify
   ridgekeyctl list
 Fingerprint for sudo (optional, password still works):  sudo ridgekey-sudo enable
+Fingerprint for admin dialogs (optional, same):        sudo ridgekey-admin enable
 Lock screen: 1) ridgekeyctl password set
              2) System Settings -> Privacy & Security -> Accessibility -> enable ridgekey-agent
                 (it is in /usr/local/ridgekey/bin). With the local signature this is needed only

@@ -1,7 +1,7 @@
 # RidgeKey - daemon and command-line client
 # SPDX-License-Identifier: MIT
 project('ridgekey', 'c',
-  version: '0.6.0',
+  version: '0.7.0',
   license: 'MIT',
   meson_version: '>= 0.59.0',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=debugoptimized'])
@@ -31,7 +31,8 @@ bsm_dep = cc.find_library('bsm')     # audit_token_to_pid / _euid (peer.c)
 daemon_frameworks = dependency('appleframeworks', modules: ['CoreFoundation', 'IOKit', 'Security'])
 
 executable('ridgekeyd',
-  ['daemon/ridgekeyd.c', 'daemon/store.c', 'daemon/secret.c', 'daemon/console.c', 'daemon/peer.c'],
+  ['daemon/ridgekeyd.c', 'daemon/store.c', 'daemon/secret.c', 'daemon/console.c', 'daemon/peer.c',
+   'daemon/prompt.c'],
   include_directories: common_inc,
   dependencies: [glib_dep, gio_dep, libfprint_dep, pam_dep, bsm_dep, daemon_frameworks],
   install: true)
@@ -70,4 +71,21 @@ executable('ridgekey-agent',
   ['agent/ridgekey-agent.c'],
   include_directories: common_inc,
   dependencies: [appsvc_dep],
+  install: true)
+
+# Authorization plugin for admin dialogs (RidgeKey.bundle, assembled by the build script).
+# Loaded into macOS's authorizationhost: system frameworks only.
+auth_frameworks = dependency('appleframeworks', modules: ['CoreFoundation', 'Security'])
+shared_module('RidgeKey',
+  ['authplugin/ridgekey-authplugin.c'],
+  include_directories: common_inc,
+  dependencies: [auth_frameworks],
+  name_prefix: '',
+  name_suffix: 'so',          # renamed to Contents/MacOS/RidgeKey in the bundle
+  install: true,
+  install_dir: get_option('libdir') / 'authplugin')
+
+executable('ridgekey-authcheck',
+  ['tools/ridgekey-authcheck.c'],
+  dependencies: [auth_frameworks],
   install: true)

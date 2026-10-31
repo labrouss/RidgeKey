@@ -15,6 +15,8 @@
 #define G_LOG_DOMAIN "ridgekeyd"
 
 #include <errno.h>
+#include <grp.h>
+#include <membership.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <string.h>
@@ -30,6 +32,7 @@
 #include "ridgekey-protocol.h"
 #include "console.h"
 #include "peer.h"
+#include "prompt.h"
 #include "secret.h"
 #include "store.h"
 
@@ -38,6 +41,8 @@
 #define RK_TIMEOUT_MATCH_MAX    RK_TIMEOUT_MAX_SECONDS
 #define RK_TIMEOUT_ENROLL       180
 #define RK_TIMEOUT_DELETE       60
+#define RK_TIMEOUT_AUTHORIZE    20     /* admin dialogs: then the password dialog appears */
+#define RK_AUTHORIZE_MISSES     3      /* wrong fingers allowed before falling back */
 
 /* ------------------------------------------------------------------------------------------ */
 /* Requests                                                                                    */
@@ -108,9 +113,9 @@ reply_error (Request *r, const char *code, const char *fmt, ...)
 /* ------------------------------------------------------------------------------------------ */
 /* Daemon state                                                                                */
 
-typedef enum { OP_ENROLL, OP_VERIFY, OP_IDENTIFY, OP_DELETE, OP_PURGE, OP_UNLOCK } OpKind;
+typedef enum { OP_ENROLL, OP_VERIFY, OP_IDENTIFY, OP_DELETE, OP_PURGE, OP_UNLOCK, OP_AUTHORIZE } OpKind;
 
-static const char *const op_names[] = { "enroll", "verify", "identify", "delete", "purge", "unlock" };
+static const char *const op_names[] = { "enroll", "verify", "identify", "delete", "purge", "unlock", "authorize" };
 
 typedef struct {
   OpKind        kind;
@@ -131,6 +136,10 @@ typedef struct {
   GPtrArray    *gallery;        /* verify / identify / purge */
   guint         purge_index;
   gint64        purge_deleted;
+
+  Prompt       *prompt;         /* authorize: the on-screen notice */
+  char         *right;          /* authorize: right being requested (for the log) */
+  gint          misses;         /* authorize: fingers that matched nobody */
 
   GError       *error;          /* final error, if any */
   const char   *err_code;       /* overrides the code derived from error */
@@ -187,6 +196,8 @@ op_free (Op *op)
   g_clear_error (&op->error);
   if (op->reply)
     xpc_release (op->reply);
+  prompt_close (op->prompt);
+  g_free (op->right);
   g_free (op->username);
   request_free (op->req);
   g_free (op);
@@ -240,6 +251,9 @@ op_finish (Op *op, GError *error)
     op->error = error;
   else if (error)
     g_error_free (error);
+
+  prompt_close (op->prompt);
+  op->prompt = NULL;
 
   if (op->timeout_id)
     {
@@ -413,6 +427,57 @@ release_password (Op *op)
   op_finish (op, NULL);
 }
 
+static gboolean
+user_is_admin (uid_t uid)
+{
+  struct group *g = getgrnam ("admin");
+  uuid_t uu, gu;
+  int member = 0;
+
+  if (!g || mbr_uid_to_uuid (uid, uu) != 0 || mbr_gid_to_uuid (g->gr_gid, gu) != 0)
+    return FALSE;
+  return mbr_check_membership (uu, gu, &member) == 0 && member;
+}
+
+/* authorize: the finger matched uid - hand over that admin's password for macOS to verify. */
+static void
+release_admin_password (Op *op, uid_t uid)
+{
+  struct passwd *pwd = getpwuid (uid);
+  GError *err = NULL;
+  char *pw;
+
+  if (!pwd || !user_is_admin (uid))
+    {
+      op->err_code = RK_ERR_NOT_ADMIN;
+      op_finish (op, g_error_new (G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                                  "%s is not an administrator", pwd ? pwd->pw_name : "the matched user"));
+      return;
+    }
+  g_free (op->username);
+  op->username = g_strdup (pwd->pw_name);
+  pw = secret_load (op->username, &err);
+  if (!pw)
+    {
+      op->err_code = g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND) ? RK_ERR_NO_PASSWORD : RK_ERR_STORAGE;
+      op_finish (op, err);
+      return;
+    }
+  if (!secret_validate (op->username, pw, &err))
+    {
+      secret_free (pw);
+      op->err_code = RK_ERR_PASSWORD_OUTDATED;
+      op_finish (op, err);
+      return;
+    }
+  xpc_dictionary_set_string (op->reply, RK_KEY_USER, op->username);
+  xpc_dictionary_set_string (op->reply, RK_KEY_PASSWORD, pw);
+  secret_free (pw);
+  g_message ("authorize: fingerprint matched admin %s for %s - password released to the plugin",
+             op->username, op->right ?: "?");
+  op_finish (op, NULL);
+}
+
 static void
 on_identified (GObject *src, GAsyncResult *res, gpointer data)
 {
@@ -452,6 +517,24 @@ on_identified (GObject *src, GAsyncResult *res, gpointer data)
           release_password (op);
           return;
         }
+      if (op->kind == OP_AUTHORIZE)
+        {
+          release_admin_password (op, uid);
+          return;
+        }
+    }
+  else if (op->kind == OP_AUTHORIZE)
+    {
+      /* Windows Hello / BIOS prints and other fingers: let the user try again a few times. */
+      if (++op->misses < RK_AUTHORIZE_MISSES && !g_cancellable_is_cancelled (op->cancel))
+        {
+          g_autofree char *msg = g_strdup_printf ("Not recognised - try again (%d of %d).\n\n"
+                                                  "Or choose Use Password.", op->misses + 1, RK_AUTHORIZE_MISSES);
+          prompt_update (op->prompt, msg);
+          op_run_identify (op);
+          return;
+        }
+      g_message ("authorize: no enrolled admin finger after %d tries", op->misses);
     }
   op_finish (op, NULL);
 }
@@ -545,7 +628,8 @@ on_opened (GObject *src, GAsyncResult *res, gpointer data)
     case OP_ENROLL:   op_run_enroll (op); break;
     case OP_VERIFY:
     case OP_IDENTIFY:
-    case OP_UNLOCK:   op_run_identify (op); break;
+    case OP_UNLOCK:
+    case OP_AUTHORIZE: op_run_identify (op); break;
     case OP_DELETE:   fp_device_delete_print (op->dev, op->old_print, op->cancel, on_deleted, op); break;
     case OP_PURGE:    purge_next (op); break;
     }
@@ -581,7 +665,8 @@ resolve_user (Request *r, uid_t *uid, char **name)
   return TRUE;
 }
 
-static void
+/* Returns the started operation (now `current`), or NULL after replying with an error. */
+static Op *
 start_op (Request *r, OpKind kind)
 {
   Op *op;
@@ -593,27 +678,27 @@ start_op (Request *r, OpKind kind)
     {
       reply_error (r, RK_ERR_BUSY, "the sensor is busy with another request");
       request_free (r);
-      return;
+      return NULL;
     }
 
   op = g_new0 (Op, 1);
   op->kind = kind;
   op->req = r;
 
-  if (kind == OP_IDENTIFY || kind == OP_PURGE)
+  if (kind == OP_IDENTIFY || kind == OP_PURGE || kind == OP_AUTHORIZE)
     {
       if (r->caller != 0)
         {
           reply_error (r, RK_ERR_PERMISSION, "%s is only available to root", op_names[kind]);
           op_free (op);
-          return;
+          return NULL;
         }
-      op->username = g_strdup ("(all users)");
+      op->username = g_strdup (kind == OP_AUTHORIZE ? "(administrators)" : "(all users)");
     }
   else if (!resolve_user (r, &op->uid, &op->username))
     {
       op_free (op);
-      return;
+      return NULL;
     }
 
   if (kind == OP_ENROLL || kind == OP_DELETE)
@@ -623,7 +708,7 @@ start_op (Request *r, OpKind kind)
         {
           reply_error (r, RK_ERR_BAD_REQUEST, "missing or unknown finger name");
           op_free (op);
-          return;
+          return NULL;
         }
       op->finger = (FpFinger) finger;
     }
@@ -645,7 +730,7 @@ start_op (Request *r, OpKind kind)
             reply_error (r, RK_ERR_NOT_FOUND, "no RidgeKey print for %s / %s",
                          op->username, rk_finger_name (finger));
             op_free (op);
-            return;
+            return NULL;
           }
         break;
       }
@@ -661,9 +746,39 @@ start_op (Request *r, OpKind kind)
           {
             reply_error (r, RK_ERR_NO_PRINTS, "no enrolled RidgeKey prints for %s", op->username);
             op_free (op);
-            return;
+            return NULL;
           }
         timeout = (t > 0) ? (guint) MIN (t, RK_TIMEOUT_MATCH_MAX) : RK_TIMEOUT_MATCH_DEF;
+        break;
+      }
+
+    case OP_AUTHORIZE:
+      {
+        gint64 t = xpc_dictionary_get_int64 (r->msg, RK_KEY_TIMEOUT);
+        GPtrArray *all = store_load_all ();
+        guint i;
+
+        /* Only administrators who have a stored password can approve - match nobody else. */
+        op->gallery = g_ptr_array_new_with_free_func (g_object_unref);
+        for (i = 0; i < all->len; i++)
+          {
+            FpPrint *p = g_ptr_array_index (all, i);
+            uid_t uid = GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (p), RK_PRINT_UID_KEY));
+            struct passwd *pwd = getpwuid (uid);
+
+            if (pwd && user_is_admin (uid) && secret_exists (pwd->pw_name))
+              g_ptr_array_add (op->gallery, g_object_ref (p));
+          }
+        g_ptr_array_unref (all);
+        if (op->gallery->len == 0)
+          {
+            reply_error (r, RK_ERR_NO_PRINTS,
+                         "no administrator has both enrolled prints and a stored password");
+            op_free (op);
+            return NULL;
+          }
+        op->right = g_strdup (xpc_dictionary_get_string (r->msg, RK_KEY_RIGHT) ?: "?");
+        timeout = (t > 0) ? (guint) MIN (t, RK_TIMEOUT_MATCH_MAX) : RK_TIMEOUT_AUTHORIZE;
         break;
       }
 
@@ -677,7 +792,7 @@ start_op (Request *r, OpKind kind)
           xpc_dictionary_set_int64 (reply, RK_KEY_DELETED, 0);
           reply_send (r, reply);
           op_free (op);
-          return;
+          return NULL;
         }
       break;
     }
@@ -687,7 +802,7 @@ start_op (Request *r, OpKind kind)
     {
       reply_error (r, RK_ERR_NO_DEVICE, "no supported fingerprint sensor found");
       op_free (op);
-      return;
+      return NULL;
     }
 
   g_message ("uid %u: %s for %s", (unsigned) r->caller, op_names[kind], op->username);
@@ -699,6 +814,7 @@ start_op (Request *r, OpKind kind)
                                          G_CALLBACK (on_finger_status), op);
   current = op;
   fp_device_open (dev, op->cancel, on_opened, op);
+  return op;
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -856,6 +972,49 @@ do_unlock (Request *r)
   start_op (r, OP_UNLOCK);
 }
 
+/* Only root (the authorization plugin runs as root in authorizationhost), and only with someone
+ * at the console with the screen unlocked - admin dialogs are for the person at the Mac. */
+static void
+do_authorize (Request *r)
+{
+  ConsoleState cs = console_get_state ();
+  const char *right = xpc_dictionary_get_string (r->msg, RK_KEY_RIGHT);
+  const char *client = xpc_dictionary_get_string (r->msg, RK_KEY_CLIENT);
+  g_autofree char *app = NULL, *msg = NULL;
+  Op *op;
+
+  if (r->caller != 0)
+    {
+      reply_error (r, RK_ERR_PERMISSION, "authorize is only available to root");
+      request_free (r);
+      return;
+    }
+  if (cs.uid == RK_NO_CONSOLE_USER || cs.uid < 500 || cs.locked)
+    {
+      reply_error (r, RK_ERR_NO_CONSOLE, "nobody is at the console with the screen unlocked");
+      request_free (r);
+      return;
+    }
+  g_message ("authorize: %s requested by %s", right ?: "?", client ?: "?");
+  op = start_op (r, OP_AUTHORIZE);
+  if (!op)
+    return;
+
+  /* "/System/Applications/System Settings.app" -> "System Settings" */
+  if (client && *client)
+    {
+      app = g_path_get_basename (client);
+      if (g_str_has_suffix (app, ".app"))
+        app[strlen (app) - 4] = '\0';
+    }
+  msg = g_strdup_printf ("Touch the fingerprint sensor to approve.\n\n%s%s%s\n\n"
+                         "Or choose Use Password.",
+                         app ? app : "", app ? " - " : "", right ? right : "administrator access");
+  op->prompt = prompt_show ("RidgeKey", msg, "Use Password",
+                            (guint) xpc_dictionary_get_int64 (r->msg, RK_KEY_TIMEOUT) ?: RK_TIMEOUT_AUTHORIZE,
+                            op->cancel);
+}
+
 static void
 do_password_check (Request *r)
 {
@@ -966,6 +1125,8 @@ handle_request (gpointer data)
     return (start_op (r, OP_PURGE), G_SOURCE_REMOVE);
   else if (strcmp (op, RK_OP_UNLOCK) == 0)
     return (do_unlock (r), G_SOURCE_REMOVE);
+  else if (strcmp (op, RK_OP_AUTHORIZE) == 0)
+    return (do_authorize (r), G_SOURCE_REMOVE);
   else
     reply_error (r, RK_ERR_BAD_REQUEST, "unknown op \"%s\"", op);
 

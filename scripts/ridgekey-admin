@@ -1,0 +1,311 @@
+#!/bin/bash
+# ridgekey-admin - approve macOS admin dialogs with a fingerprint (password still works).
+#
+#   sudo ridgekey-admin enable [RIGHT ...]   default: the common admin dialogs (list below)
+#   sudo ridgekey-admin disable [RIGHT ...]  default: every right RidgeKey changed
+#   ridgekey-admin status
+#   sudo ridgekey-admin selftest             can macOS load RidgeKey.bundle?
+#   ridgekey-admin candidates                rights that can be switched (admin password rules)
+#   ridgekey-admin watch                     show which rights apps ask for (Ctrl-C to stop)
+#
+# How: each enabled RIGHT is rewritten (security authorizationdb) to
+#     class rule, k-of-n 1, rule = [ (is-root) (entitled)
+#                                    io.github.labrouss.ridgekey.fingerprint
+#                                    io.github.labrouss.ridgekey.orig.RIGHT ]
+# authd tries the fingerprint first (RidgeKey:fingerprint + macOS's builtin:authenticate). If it
+# is denied - no match, timeout, "Use Password", daemon down - authd evaluates the untouched
+# original definition, i.e. the normal password dialog.
+#
+# Safety:
+#   - The original definition is saved in /Library/Application Support/RidgeKey/authdb/ and is
+#     written back byte-for-byte by 'disable'. A right that changed since (macOS update) is left
+#     alone.
+#   - 'enable' refuses unless 'selftest' passes (macOS loads and runs RidgeKey.bundle).
+#   - Only rights that need an administrator's password are accepted.
+#   - If admin dialogs ever misbehave:   sudo ridgekey-admin disable   (sudo itself is not
+#     affected by any of this).
+set -euo pipefail
+
+PFX="io.github.labrouss.ridgekey"
+FP_RULE="$PFX.fingerprint"
+SELFTEST="$PFX.selftest"
+ORIG="$PFX.orig."
+PLUGIN="/Library/Security/SecurityAgentPlugins/RidgeKey.bundle"
+STATE="/Library/Application Support/RidgeKey/authdb"
+PB=/usr/libexec/PlistBuddy
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Common admin dialogs. Rights that do not exist (or are not plain admin-password rules) on
+# this macOS version are skipped with a note.
+DEFAULT_RIGHTS="
+system.preferences
+system.preferences.accounts
+system.preferences.datetime
+system.preferences.energysaver
+system.preferences.network
+system.preferences.printing
+system.preferences.security
+system.preferences.sharing
+system.preferences.softwareupdate
+system.preferences.startupdisk
+system.preferences.timemachine
+system.privilege.admin
+system.install.software
+system.services.systemconfiguration.network
+com.apple.system-extensions.admin
+"
+
+die()  { echo "ridgekey-admin: $*" >&2; exit 1; }
+need_root() { [ "$(id -u)" = 0 ] || die "run with sudo: sudo ridgekey-admin $*"; }
+
+TMP="$(mktemp -d /tmp/ridgekey-admin.XXXXXX)"
+trap 'rm -rf "$TMP"' EXIT
+
+authcheck_path() {
+  local c
+  for c in "$HERE/ridgekey-authcheck" "$HERE/bin/ridgekey-authcheck" /usr/local/ridgekey/bin/ridgekey-authcheck; do
+    [ -x "$c" ] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+
+# read_right NAME FILE - 0 if the right exists (FILE = its plist)
+read_right() {
+  security authorizationdb read "$1" > "$2" 2>/dev/null && plutil -lint "$2" >/dev/null 2>&1
+}
+
+# write_right NAME FILE
+write_right() {
+  security authorizationdb write "$1" < "$2" >/dev/null 2>&1 || return 1
+  read_right "$1" "$TMP/check.plist"
+}
+
+get() { plutil -extract "$2" raw -o - "$1" 2>/dev/null || true; }
+
+# The right's "rule" entries, one per line (works for a string or an array).
+rule_list() {
+  plutil -extract rule json -o - "$1" 2>/dev/null | tr -d '[]" \t\n' | tr ',' '\n' | sed '/^$/d' || true
+}
+
+is_wrapped() { rule_list "$1" | grep -qx "$FP_RULE"; }
+
+# qualify FILE - can this definition be wrapped? Sets Q_ROOT / Q_ENT; prints the reason if not.
+qualify() {
+  local f=$1 cls r adm=0
+  Q_ROOT=0; Q_ENT=0
+  cls="$(get "$f" class)"
+  case "$cls" in
+    user)
+      [ "$(get "$f" group)" = admin ]              || { echo "not an admin-password rule"; return 1; }
+      [ "$(get "$f" session-owner)" != true ]      || { echo "session-owner rule"; return 1; }
+      [ "$(get "$f" authenticate-user)" != false ] || { echo "does not ask for a password"; return 1; }
+      [ "$(get "$f" allow-root)" = true ] && Q_ROOT=1
+      return 0 ;;
+    rule)
+      is_wrapped "$f" && { echo "already enabled"; return 1; }
+      for r in $(rule_list "$f"); do
+        case "$r" in
+          is-root) Q_ROOT=1 ;;
+          entitled) Q_ENT=1 ;;
+          authenticate-admin|authenticate-admin-nonshared|authenticate-admin-30) adm=1 ;;
+          *) echo "uses rule '$r'"; return 1 ;;
+        esac
+      done
+      [ $adm = 1 ] || { echo "not an admin-password rule"; return 1; }
+      return 0 ;;
+    *) echo "class '${cls:-?}'"; return 1 ;;
+  esac
+}
+
+write_plist() {   # FILE: the RidgeKey rules
+  cat > "$1"
+  plutil -lint "$1" >/dev/null || die "internal error: bad plist $1"
+}
+
+ensure_selftest_right() {
+  write_plist "$TMP/selftest.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>class</key><string>evaluate-mechanisms</string>
+  <key>comment</key><string>RidgeKey: checks that macOS can load RidgeKey.bundle. Always allowed; grants nothing.</string>
+  <key>mechanisms</key><array><string>RidgeKey:selftest,privileged</string></array>
+  <key>shared</key><false/>
+  <key>tries</key><integer>1</integer>
+</dict>
+</plist>
+EOF
+  write_right "$SELFTEST" "$TMP/selftest.plist" || die "could not write $SELFTEST"
+}
+
+ensure_fp_rule() {
+  write_plist "$TMP/fp.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>class</key><string>evaluate-mechanisms</string>
+  <key>comment</key><string>RidgeKey: an administrator's fingerprint, then macOS verifies that administrator's stored password. Denied (never cancelled) on any failure, so the original password rule runs next.</string>
+  <key>mechanisms</key>
+  <array>
+    <string>RidgeKey:fingerprint,privileged</string>
+    <string>builtin:authenticate,privileged</string>
+  </array>
+  <key>shared</key><false/>
+  <key>tries</key><integer>1</integer>
+</dict>
+</plist>
+EOF
+  write_right "$FP_RULE" "$TMP/fp.plist" || die "could not write $FP_RULE"
+}
+
+do_selftest() {
+  need_root selftest
+  [ -f "$PLUGIN/Contents/MacOS/RidgeKey" ] || { echo "selftest: $PLUGIN is not installed"; return 1; }
+  ensure_selftest_right
+  local out rc ac
+  ac="$(authcheck_path)" || { echo "selftest: ridgekey-authcheck not found"; return 1; }
+  # authd answers within a second; the alarm only guards against a hang.
+  set +e; out="$(perl -e 'alarm 30; exec @ARGV' "$ac" "$SELFTEST" 2>&1)"; rc=$?; set -e
+  if [ $rc = 0 ]; then
+    echo "selftest: ok - macOS loads and runs RidgeKey.bundle"
+    return 0
+  fi
+  echo "selftest: FAILED ($out, exit $rc)"
+  echo "          see: log show --last 2m --predicate 'process == \"authd\" OR process == \"authorizationhost\"'"
+  return 1
+}
+
+wrap() {   # RIGHT
+  local name=$1 o="$TMP/orig.plist" w="$TMP/wrap.plist" k i=0
+  if ! read_right "$name" "$o"; then echo "  -  $name: not defined on this Mac - skipped"; return 3; fi
+  if is_wrapped "$o"; then echo "  ok $name: already enabled"; return 0; fi
+  # (not in $(...): qualify sets Q_ROOT / Q_ENT for us)
+  if ! qualify "$o" > "$TMP/why"; then echo "  -  $name: $(cat "$TMP/why") - skipped"; return 3; fi
+
+  mkdir -p "$STATE"; chmod 700 "$STATE"
+  cp "$o" "$STATE/$name.plist"; chmod 600 "$STATE/$name.plist"
+  write_right "$ORIG$name" "$o" || { rm -f "$STATE/$name.plist"; echo "  !! $name: could not save the original copy - skipped"; return 1; }
+
+  cp "$o" "$w"
+  for k in class rule k-of-n group shared timeout allow-root authenticate-user session-owner \
+           mechanisms tries extract-password password-only entitled-group vpn-entitled-group; do
+    "$PB" -c "Delete :$k" "$w" >/dev/null 2>&1 || true
+  done
+  "$PB" -c "Add :class string rule" -c "Add :k-of-n integer 1" -c "Add :rule array" "$w"
+  [ $Q_ROOT = 1 ] && { "$PB" -c "Add :rule:$i string is-root" "$w"; i=$((i + 1)); }
+  [ $Q_ENT = 1 ]  && { "$PB" -c "Add :rule:$i string entitled" "$w"; i=$((i + 1)); }
+  "$PB" -c "Add :rule:$i string $FP_RULE" -c "Add :rule:$((i + 1)) string $ORIG$name" "$w"
+  "$PB" -c "Delete :comment" "$w" >/dev/null 2>&1 || true
+  "$PB" -c "Add :comment string RidgeKey: fingerprint first, then the original rule ($ORIG$name)." "$w"
+
+  if write_right "$name" "$w" && is_wrapped "$TMP/check.plist"; then
+    echo "  ok $name"
+  else
+    write_right "$name" "$o" || true
+    security authorizationdb remove "$ORIG$name" >/dev/null 2>&1 || true
+    rm -f "$STATE/$name.plist"
+    echo "  !! $name: could not be changed - left as it was"
+    return 1
+  fi
+}
+
+unwrap() {   # RIGHT
+  local name=$1 b="$STATE/$1.plist" live="$TMP/live.plist"
+  [ -f "$b" ] || { echo "  -  $name: not enabled by RidgeKey"; return 0; }
+  if read_right "$name" "$live" && is_wrapped "$live"; then
+    if ! write_right "$name" "$b" || is_wrapped "$TMP/check.plist"; then
+      echo "  !! $name: could not restore the original - kept the backup in $b"; return 1
+    fi
+    echo "  ok $name: original restored"
+  else
+    echo "  ok $name: changed since (macOS update?) - left as it is"
+  fi
+  security authorizationdb remove "$ORIG$name" >/dev/null 2>&1 || true
+  rm -f "$b"
+}
+
+enabled_rights() {
+  [ -d "$STATE" ] || return 0
+  local f
+  for f in "$STATE"/*.plist; do [ -f "$f" ] && basename "$f" .plist; done
+}
+
+cmd_enable() {
+  need_root enable
+  [ -f "$PLUGIN/Contents/MacOS/RidgeKey" ] || die "$PLUGIN is missing - run install.sh first"
+  do_selftest || die "not enabling anything: macOS could not run the RidgeKey plugin"
+  ensure_fp_rule
+  local rights="${*:-$DEFAULT_RIGHTS}" r fail=0 rc
+  echo "==> Fingerprint for admin dialogs"
+  for r in $rights; do
+    set +e; wrap "$r"; rc=$?; set -e
+    # Skipping is fine for the default list; a right named on the command line must work.
+    if [ $rc = 1 ] || { [ $rc = 3 ] && [ $# -gt 0 ]; }; then fail=1; fi
+  done
+  [ $fail = 0 ] || { echo; echo "Some rights could not be switched (see above)."; return 1; }
+  cat <<'EOF'
+
+Approving needs: an administrator with enrolled prints AND a stored password
+  (ridgekeyctl password set - the same one the lock screen uses).
+Try it: System Settings -> Users & Groups -> click a lock / "Unlock".
+Undo:   sudo ridgekey-admin disable
+EOF
+}
+
+cmd_disable() {
+  need_root disable
+  local rights="${*:-$(enabled_rights)}" r fail=0
+  echo "==> Restoring the original admin rules"
+  [ -n "$rights" ] || echo "  nothing enabled"
+  for r in $rights; do unwrap "$r" || fail=1; done
+  if [ -z "$(enabled_rights)" ]; then
+    security authorizationdb remove "$FP_RULE" >/dev/null 2>&1 || true
+    security authorizationdb remove "$SELFTEST" >/dev/null 2>&1 || true
+  fi
+  return $fail
+}
+
+cmd_status() {
+  local r n=0 live="$TMP/live.plist"
+  if [ -f "$PLUGIN/Contents/Info.plist" ]; then
+    echo "plugin:   $PLUGIN ($(defaults read "$PLUGIN/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo ?))"
+  else
+    echo "plugin:   not installed"
+  fi
+  echo "enabled rights:"
+  for r in $(enabled_rights); do
+    n=$((n + 1))
+    if read_right "$r" "$live" && is_wrapped "$live"; then echo "  on   $r"
+    else echo "  off  $r (changed since - 'disable $r' cleans up)"; fi
+  done
+  [ $n = 0 ] && echo "  none  (sudo ridgekey-admin enable)"
+  return 0
+}
+
+cmd_candidates() {
+  sqlite3 -readonly /var/db/auth.db "SELECT name FROM rules WHERE type = 1 ORDER BY name;" 2>/dev/null \
+    || die "cannot read /var/db/auth.db (try with sudo)"
+}
+
+case "${1:-}" in
+  enable)     shift; cmd_enable "$@" ;;
+  disable)    shift; cmd_disable "$@" ;;
+  status)     cmd_status ;;
+  selftest)   do_selftest ;;
+  candidates)
+    need_root candidates
+    for r in $(cmd_candidates); do
+      case "$r" in "$PFX".*) continue ;; esac
+      read_right "$r" "$TMP/c.plist" || continue
+      if is_wrapped "$TMP/c.plist"; then echo "on   $r"
+      elif qualify "$TMP/c.plist" >/dev/null; then echo "     $r"; fi
+    done ;;
+  watch)
+    echo "Ask for admin rights now (click a lock, install something). Ctrl-C to stop."
+    log stream --style compact --predicate 'process == "authd" AND (eventMessage CONTAINS "authorizing right" OR eventMessage CONTAINS "Failed to authorize")' ;;
+  *)
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2 ;;
+esac

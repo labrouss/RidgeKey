@@ -41,6 +41,8 @@ usage (FILE *f)
     "  password clear          remove the stored password\n"
     "  password check          is a password stored, and is it still your login password?\n"
     "                          (password set --stdin reads it from standard input, for scripts)\n"
+    "  authorize [RIGHT]       test the admin-dialog path: on-screen prompt + an admin's finger\n"
+    "                          (root only; the password is never printed)\n"
     "\n"
     "  -u USER   act on another user (root only)\n"
     "  -v        show finger on/off events\n"
@@ -159,6 +161,11 @@ print_result (const char *op, xpc_object_t reply)
     {
       printf ("Stored password removed for %s.\n", xpc_dictionary_get_string (reply, RK_KEY_USER));
     }
+  else if (strcmp (op, RK_OP_AUTHORIZE) == 0)
+    {
+      printf ("APPROVED: administrator %s (password released to this process - not shown)\n",
+              xpc_dictionary_get_string (reply, RK_KEY_USER));
+    }
   else if (strcmp (op, RK_OP_PASSWORD_CHECK) == 0)
     {
       int stored = xpc_dictionary_get_bool (reply, RK_KEY_PASSWORD_STORED);
@@ -272,7 +279,7 @@ main (int argc, char **argv)
   if (strcmp (op, RK_OP_STATUS) && strcmp (op, RK_OP_LIST) && strcmp (op, RK_OP_ENROLL) &&
       strcmp (op, RK_OP_VERIFY) && strcmp (op, RK_OP_IDENTIFY) && strcmp (op, RK_OP_DELETE) &&
       strcmp (op, RK_OP_PURGE) && strcmp (op, RK_OP_PASSWORD_SET) && strcmp (op, RK_OP_PASSWORD_CLEAR) &&
-      strcmp (op, RK_OP_PASSWORD_CHECK) && strcmp (op, RK_OP_UNLOCK))   /* unlock: test only, always refused */
+      strcmp (op, RK_OP_PASSWORD_CHECK) && strcmp (op, RK_OP_UNLOCK) && strcmp (op, RK_OP_AUTHORIZE))   /* unlock: test only, always refused */
     {
       fprintf (stderr, "unknown command: %s\n\n", op);
       usage (stderr);
@@ -317,6 +324,14 @@ main (int argc, char **argv)
   xpc_dictionary_set_string (msg, RK_KEY_OP, op);
   if (user)
     xpc_dictionary_set_string (msg, RK_KEY_USER, user);
+  if (finger && strcmp (op, RK_OP_AUTHORIZE) == 0)
+    {
+      xpc_dictionary_set_string (msg, RK_KEY_RIGHT, finger);
+      xpc_dictionary_set_string (msg, RK_KEY_CLIENT, "/usr/local/bin/ridgekeyctl");
+      finger = NULL;
+    }
+  else if (strcmp (op, RK_OP_AUTHORIZE) == 0)
+    xpc_dictionary_set_string (msg, RK_KEY_RIGHT, "ridgekeyctl test");
   if (finger)
     xpc_dictionary_set_string (msg, RK_KEY_FINGER, finger);
   if (timeout > 0)
@@ -329,7 +344,8 @@ main (int argc, char **argv)
 
   if (strcmp (op, RK_OP_ENROLL) == 0)
     printf ("Enrolling %s - touch the sensor, lift, and repeat until done.\n", finger);
-  else if (strcmp (op, RK_OP_VERIFY) == 0 || strcmp (op, RK_OP_IDENTIFY) == 0)
+  else if (strcmp (op, RK_OP_VERIFY) == 0 || strcmp (op, RK_OP_IDENTIFY) == 0 ||
+           strcmp (op, RK_OP_AUTHORIZE) == 0)
     printf ("Touch the sensor...\n");
   fflush (stdout);
 

@@ -228,16 +228,16 @@ mkdir -p "$BUNDLE/lib/pkgconfig"
 for pc in "$PREFIX"/lib/pkgconfig/*.pc; do
   sed "s|^prefix=.*|prefix=\${pcfiledir}/../..|" "$pc" > "$BUNDLE/lib/pkgconfig/$(basename "$pc")"
 done
-for b in ridgekeyd ridgekeyctl ridgekey-pamcheck ridgekey-typetest ridgekey-agent; do
+for b in ridgekeyd ridgekeyctl ridgekey-pamcheck ridgekey-typetest ridgekey-agent ridgekey-authcheck; do
   [ -x "$PREFIX/bin/$b" ] || die "$b not built"
   cp "$PREFIX/bin/$b" "$BUNDLE/bin/"
 done
 mkdir -p "$BUNDLE/launchd"
 cp "$REPO/launchd/"*.plist "$BUNDLE/launchd/"
 cp "$REPO/scripts/install.sh" "$REPO/scripts/uninstall.sh" "$REPO/scripts/ridgekey-sudo" \
-   "$REPO/scripts/ridgekey-sign" "$REPO/scripts/typetest-as-daemon.sh" "$BUNDLE/"
+   "$REPO/scripts/ridgekey-sign" "$REPO/scripts/ridgekey-admin" "$REPO/scripts/typetest-as-daemon.sh" "$BUNDLE/"
 chmod 755 "$BUNDLE/install.sh" "$BUNDLE/uninstall.sh" "$BUNDLE/ridgekey-sudo" "$BUNDLE/ridgekey-sign" \
-  "$BUNDLE/typetest-as-daemon.sh"
+  "$BUNDLE/ridgekey-admin" "$BUNDLE/typetest-as-daemon.sh"
 for ex in $EXAMPLES; do
   [ -x "$WORK/libfprint/_build/examples/$ex" ] || die "example $ex not built"
   cp "$WORK/libfprint/_build/examples/$ex" "$BUNDLE/bin/"
@@ -263,6 +263,37 @@ for d in $(otool -L "$BUNDLE/lib/pam/pam_ridgekey.so" | tail -n +2 | awk '{print
 done
 nm -gU "$BUNDLE/lib/pam/pam_ridgekey.so" | grep -q '_pam_sm_authenticate$' || die "pam_sm_authenticate not exported"
 echo "    pam_ridgekey.so: system libraries only, pam_sm_authenticate exported"
+
+# Authorization plugin: loaded into macOS's authorizationhost - system libraries only.
+AP="$BUNDLE/RidgeKey.bundle"
+mkdir -p "$AP/Contents/MacOS"
+cp "$PREFIX/lib/authplugin/RidgeKey.so" "$AP/Contents/MacOS/RidgeKey"
+cat > "$AP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleExecutable</key><string>RidgeKey</string>
+  <key>CFBundleIdentifier</key><string>io.github.labrouss.ridgekey.authplugin</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>RidgeKey</string>
+  <key>CFBundlePackageType</key><string>BNDL</string>
+  <key>CFBundleShortVersionString</key><string>$RK_VER</string>
+  <key>CFBundleVersion</key><string>$RK_VER</string>
+</dict>
+</plist>
+PLIST
+plutil -lint "$AP/Contents/Info.plist" >/dev/null || die "RidgeKey.bundle Info.plist is invalid"
+file "$AP/Contents/MacOS/RidgeKey" | grep -Eq 'bundle|shared library' || die "RidgeKey.bundle executable is not loadable Mach-O"
+for d in $(otool -L "$AP/Contents/MacOS/RidgeKey" | tail -n +2 | awk '{print $1}'); do
+  case "$d" in /usr/lib/*|/System/*) ;; *) die "RidgeKey.bundle links $d - must use system libraries only" ;; esac
+done
+nm -gU "$AP/Contents/MacOS/RidgeKey" | grep -q '_AuthorizationPluginCreate$' || die "AuthorizationPluginCreate not exported"
+codesign --force --sign - --identifier io.github.labrouss.ridgekey.authplugin "$AP" >/dev/null 2>&1 \
+  || die "codesign failed for RidgeKey.bundle"
+codesign --verify --strict "$AP" || die "RidgeKey.bundle signature does not verify"
+echo "    RidgeKey.bundle: system libraries only, AuthorizationPluginCreate exported"
 
 log "RidgeKey.app (SwiftUI)"
 run bash "$REPO/scripts/build-app.sh" "$BUNDLE/RidgeKey.app"
@@ -309,6 +340,10 @@ Use (as your normal user):
 Fingerprint for sudo (optional; your password keeps working):
   sudo ridgekey-sudo enable               # then test in a NEW terminal: sudo -k; sudo -v
   sudo ridgekey-sudo disable
+
+Fingerprint for admin dialogs (optional; the password dialog still appears as a fallback):
+  sudo ridgekey-admin enable
+  sudo ridgekey-admin disable             # restores the original macOS rules exactly
 
 Uninstall:  sudo ./uninstall.sh            (keeps prints)
             sudo ./uninstall.sh --purge    (deletes RidgeKey's prints from the sensor first)

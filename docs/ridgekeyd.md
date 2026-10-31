@@ -157,6 +157,53 @@ Module options (append to the line): `timeout=N` (seconds per try, default 10), 
 osascript -e 'do shell script "sed -i \"\" /pam_ridgekey/d /etc/pam.d/sudo_local" with administrator privileges'
 ```
 
+## Fingerprint for admin dialogs
+
+```sh
+sudo ridgekey-admin enable          # the common admin dialogs (or name rights: enable system.preferences)
+sudo ridgekey-admin disable         # restore every original rule exactly
+ridgekey-admin status
+sudo ridgekey-admin candidates      # every admin-password right on this Mac
+ridgekey-admin watch                # which rights apps ask for (to find more to enable)
+ridgekey-admin selftest             # can macOS load RidgeKey.bundle? (sudo)
+```
+
+Needs an **administrator** with enrolled prints **and** a stored password (`ridgekeyctl password
+set`, the same one the lock screen uses).
+
+macOS decides who may do what with rules in its authorization database. `enable` rewrites each
+chosen right so that authd tries RidgeKey first and the untouched original second:
+
+```
+system.preferences  =  any 1 of:  is-root (if the original allowed root)
+                                  io.github.labrouss.ridgekey.fingerprint
+                                     RidgeKey:fingerprint,privileged   (our plugin)
+                                     builtin:authenticate,privileged   (macOS checks the password)
+                                  io.github.labrouss.ridgekey.orig.system.preferences  (the original)
+```
+
+| You do | macOS does |
+|---|---|
+| touch with an enrolled admin's finger | approves; RidgeKey handed that admin's stored password to macOS, which verified it |
+| wrong finger ×3, no touch within 20 s, **Use Password** | the normal password dialog |
+| no admin prints, password not stored or outdated, daemon stopped, screen locked | the normal password dialog straight away |
+
+**Safety:**
+- The plugin only ever answers *allow* or *deny*. authd aborts the whole request on an internal
+  error, which would skip the password fallback, so the plugin never reports one.
+- `enable` first runs `selftest`: a throwaway right whose only mechanism is
+  `RidgeKey:selftest`. Unless macOS loads and runs the plugin, nothing is changed.
+- Each original definition is saved in `/Library/Application Support/RidgeKey/authdb/` and
+  written back by `disable`. A right that a macOS update replaced since is left as it is.
+- `install.sh` re-runs the selftest after an upgrade and switches the feature off if it fails.
+  `uninstall.sh` restores every rule **before** removing the plugin.
+- Only rights that ask for an administrator's password are accepted.
+- Matching only considers administrators who have a stored password, and only while someone is
+  at the console with the screen unlocked.
+
+**If admin dialogs ever misbehave:** `sudo ridgekey-admin disable` (sudo is not affected by
+this feature).
+
 ## Permissions
 
 | Operation | Who |
@@ -164,6 +211,7 @@ osascript -e 'do shell script "sed -i \"\" /pam_ridgekey/d /etc/pam.d/sudo_local
 | status | anyone |
 | list, enroll, verify, delete | the user themselves (caller's effective uid); root for anyone |
 | identify, purge | root only |
+| authorize | root only (the authorization plugin); console user present, screen unlocked |
 | cancel | the client that started the operation; root |
 
 ## Safety rules

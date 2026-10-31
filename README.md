@@ -24,8 +24,8 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 | 4c | Stored password: checked, then kept in the System keychain (root only); lock-state tracking | ✅ 0.3.0 tested |
 | 4b | Lock screen: `ridgekey-agent` types the stored password into Apple's own lock screen after a match ([docs](docs/ridgekeyd.md#lock-screen-unlock)) | ✅ 0.4.3 tested: display on and asleep |
 | 4d | **RidgeKey.app** (SwiftUI): status, enroll/delete with progress, lock-screen password, sudo toggle | ✅ 0.6.0 tested on the 840 G8 |
-| 4f | Authorization plugin for admin password dialogs | planned |
 | 4e | Stable local code signature, so Accessibility survives upgrades (`ridgekey-sign`) | ✅ 0.6.0: confirmed on the 840 G8 (reinstalls keep the certificate and the Accessibility grant) |
+| 4f | Admin password dialogs by fingerprint: `RidgeKey.bundle` authorization plugin + `ridgekey-admin` ([docs](docs/ridgekeyd.md#fingerprint-for-admin-dialogs)) | 🔧 0.7.0 first version |
 
 Why not an Authorization plugin for the lock screen? Since macOS 14 the lock screen uses its own
 modern UI. Getting a plugin to run there means reverting `system.login.screensaver` to the legacy
@@ -52,6 +52,11 @@ Tahoe.
 4. Optional, fingerprint for `sudo` (your password keeps working):
    ```sh
    sudo ridgekey-sudo enable    # then in a NEW terminal: sudo -k; sudo -v
+   ```
+5. Optional, fingerprint for admin dialogs (System Settings locks, installers). The password
+   dialog still appears when the fingerprint fails:
+   ```sh
+   sudo ridgekey-admin enable
    ```
 
 Details, permissions and the XPC API: [docs/ridgekeyd.md](docs/ridgekeyd.md).

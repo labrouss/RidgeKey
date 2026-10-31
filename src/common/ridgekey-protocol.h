@@ -39,7 +39,7 @@
 
 #include <string.h>
 
-#define RK_VERSION        "0.6.0"
+#define RK_VERSION        "0.7.0"
 #define RK_SERVICE_NAME   "io.github.labrouss.ridgekey"
 
 /* The only program allowed to receive the stored password (op "unlock"). */
@@ -74,6 +74,8 @@
 #define RK_KEY_PASSWORD_VALID  "password-valid"
 #define RK_KEY_CONSOLE_USER    "console-user"
 #define RK_KEY_SCREEN_LOCKED   "screen-locked"
+#define RK_KEY_RIGHT           "right"    /* authorize: the authorization right being requested */
+#define RK_KEY_CLIENT          "client"   /* authorize: path of the app asking for it */
 
 /* operations */
 #define RK_OP_STATUS    "status"    /* anyone */
@@ -91,6 +93,10 @@
 #define RK_OP_UNLOCK    "unlock"    /* the RidgeKey agent only (see peer.c), for the console user while
                                      * the screen is locked: wait for a matching finger, then reply
                                      * with "password" so the agent can type it into the lock screen */
+#define RK_OP_AUTHORIZE "authorize" /* root only (the RidgeKey authorization plugin): show an on-screen
+                                     * prompt, match any enrolled admin's finger, then reply with
+                                     * "user" + "password" for macOS to verify (builtin:authenticate).
+                                     * Needs someone at the console with the screen unlocked. */
 
 /* events */
 #define RK_EV_FINGER          "finger"
@@ -113,6 +119,8 @@
 #define RK_ERR_NO_PASSWORD  "no-password"         /* unlock: nothing stored */
 #define RK_ERR_PASSWORD_OUTDATED "password-outdated" /* unlock: stored one no longer works */
 #define RK_ERR_NOT_LOCKED   "not-locked"          /* unlock: not the locked console user */
+#define RK_ERR_NOT_ADMIN    "not-admin"           /* authorize: matched user is not an administrator */
+#define RK_ERR_NO_CONSOLE   "no-console"          /* authorize: nobody at the console, or screen locked */
 
 /* Finger names, indexed by libfprint's FpFinger (1..10). Index 0 = unknown. */
 static const char *const rk_finger_names[] = {

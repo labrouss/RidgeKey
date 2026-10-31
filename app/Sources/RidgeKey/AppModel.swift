@@ -22,6 +22,10 @@ final class AppModel: ObservableObject {
     // sudo
     @Published var sudoEnabled = false
 
+    // admin dialogs
+    @Published var adminEnabled = false
+    @Published var adminMessage = ""
+
     // enrollment in progress
     @Published var enrolling = false
     @Published var enrollFinger = ""
@@ -61,6 +65,7 @@ final class AppModel: ObservableObject {
             passwordValid = false
         }
         sudoEnabled = Self.readSudoEnabled()
+        adminEnabled = await Self.readAdminEnabled()
     }
 
     // MARK: verify
@@ -160,20 +165,57 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Runs ridgekey-sudo through the standard administrator authorization dialog.
-    func setSudo(_ enable: Bool) async {
-        let command = "\(RK.sudoTool) \(enable ? "enable" : "disable")"
-        sudoMessage = enable ? "Enabling…" : "Disabling…"
-        await Task.yield()   // let the "Enabling…" text appear before the modal dialog
+    /// Runs a command as root through the standard administrator authorization dialog
+    /// (which itself accepts a fingerprint once admin dialogs are enabled).
+    private func runPrivileged(_ command: String) async -> (ok: Bool, output: String) {
+        await Task.yield()   // let the status text appear before the modal dialog
         // NSAppleScript belongs on the main thread; the dialog is modal anyway.
-        let script = "do shell script \"\(command)\" with administrator privileges"
+        let script = "do shell script \"\(command) 2>&1\" with administrator privileges"
         var error: NSDictionary?
         let out = NSAppleScript(source: script)?.executeAndReturnError(&error)
-        let result: (ok: Bool, output: String) = error.map {
+        return error.map {
             (false, $0[NSAppleScript.errorMessage] as? String ?? "cancelled")
         } ?? (true, out?.stringValue ?? "")
+    }
+
+    func setSudo(_ enable: Bool) async {
+        sudoMessage = enable ? "Enabling…" : "Disabling…"
+        let result = await runPrivileged("\(RK.sudoTool) \(enable ? "enable" : "disable")")
         sudoMessage = result.ok ? (result.output.split(separator: "\n").first.map(String.init) ?? "") : "✗ \(result.output)"
         sudoEnabled = Self.readSudoEnabled()
+    }
+
+    // MARK: admin dialogs
+
+    /// system.preferences is the first right ridgekey-admin switches; anyone may read the rules.
+    nonisolated static func readAdminEnabled() async -> Bool {
+        await Task.detached {
+            let p = Process()
+            let pipe = Pipe()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+            p.arguments = ["authorizationdb", "read", "system.preferences"]
+            p.standardOutput = pipe
+            p.standardError = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return false }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).contains(RK.fingerprintRule)
+        }.value
+    }
+
+    func setAdmin(_ enable: Bool) async {
+        adminMessage = enable ? "Enabling…" : "Disabling…"
+        let result = await runPrivileged("\(RK.adminTool) \(enable ? "enable" : "disable")")
+        let lines = result.output.split(separator: "\n").map(String.init)
+        let switched = lines.filter { $0.hasPrefix("  ok ") }.count
+        if !result.ok {
+            adminMessage = "✗ " + (lines.last(where: { !$0.isEmpty }) ?? result.output)
+        } else if enable {
+            adminMessage = "Fingerprint enabled for \(switched) admin action\(switched == 1 ? "" : "s")."
+        } else {
+            adminMessage = "Normal password dialogs restored (\(switched))."
+        }
+        adminEnabled = await Self.readAdminEnabled()
     }
 
     // MARK: helpers

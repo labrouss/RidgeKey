@@ -3,7 +3,7 @@
 import SwiftUI
 
 enum Pane: String, CaseIterable, Identifiable {
-    case overview, fingerprints, lockScreen, sudo, about
+    case overview, fingerprints, lockScreen, admin, sudo, about
     var id: String { rawValue }
 
     var title: String {
@@ -11,6 +11,7 @@ enum Pane: String, CaseIterable, Identifiable {
         case .overview: return "Overview"
         case .fingerprints: return "Fingerprints"
         case .lockScreen: return "Lock Screen"
+        case .admin: return "Admin Dialogs"
         case .sudo: return "sudo"
         case .about: return "About"
         }
@@ -21,6 +22,7 @@ enum Pane: String, CaseIterable, Identifiable {
         case .overview: return "gauge"
         case .fingerprints: return "touchid"
         case .lockScreen: return "lock.display"
+        case .admin: return "lock.shield"
         case .sudo: return "terminal"
         case .about: return "info.circle"
         }
@@ -43,6 +45,7 @@ struct ContentView: View {
                 case .overview: OverviewView()
                 case .fingerprints: FingerprintsView()
                 case .lockScreen: LockScreenView()
+                case .admin: AdminView()
                 case .sudo: SudoView()
                 case .about: AboutView()
                 }
@@ -280,6 +283,37 @@ struct SudoView: View {
                 Text("Adds pam_ridgekey to /etc/pam.d/sudo_local. sudo then asks for your fingerprint "
                      + "first; a wrong finger, a timeout, Ctrl-C or SSH sessions fall back to your password. "
                      + "Changing this asks for an administrator password.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+// MARK: - admin dialogs
+
+struct AdminView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Use fingerprint for admin dialogs",
+                       isOn: Binding(get: { model.adminEnabled },
+                                     set: { on in Task { await model.setAdmin(on) } }))
+                if !model.adminMessage.isEmpty {
+                    Text(model.adminMessage).foregroundStyle(.secondary)
+                }
+                StatusRow(title: "Stored password",
+                          detail: model.passwordStored ? (model.passwordValid ? "stored and valid" : "outdated")
+                                                       : "not stored - set it under Lock Screen",
+                          state: model.passwordStored && model.passwordValid ? .good : .warn)
+            }
+            Section("How it works") {
+                Text("System Settings locks, installers and other \"wants to make changes\" requests show "
+                     + "a RidgeKey notice first: touch the sensor with an administrator's finger. RidgeKey "
+                     + "hands that administrator's stored password to macOS, which checks it as usual. "
+                     + "A wrong finger, a timeout or \"Use Password\" brings up the normal password dialog. "
+                     + "Turning this off restores the original macOS rules exactly.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }

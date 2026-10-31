@@ -149,7 +149,66 @@ expect_out "^enabled" "sudo_local has pam_ridgekey"
 expect_rc 0 "sudo still works with the module in sudo_local" sudo -n true
 expect_rc 0 "enable again is a no-op" sudo ridgekey-sudo enable
 expect_out "already enabled" "idempotent"
+
+echo "== admin dialogs: plugin + ridgekey-admin (real authd)"
+CIR="io.github.labrouss.ridgekey.citest"
+FPR="io.github.labrouss.ridgekey.fingerprint"
+PLUG=/Library/Security/SecurityAgentPlugins/RidgeKey.bundle
+# Normalised dump of a right (authd adds created/modified timestamps on every write).
+dump_right() {
+  local f; f="$(mktemp)"
+  sudo security authorizationdb read "$1" > "$f" 2>/dev/null || { rm -f "$f"; return 1; }
+  /usr/libexec/PlistBuddy -c "Delete :created" "$f" >/dev/null 2>&1 || true
+  /usr/libexec/PlistBuddy -c "Delete :modified" "$f" >/dev/null 2>&1 || true
+  plutil -convert xml1 -o - "$f"; rm -f "$f"
+}
+[ -f "$PLUG/Contents/MacOS/RidgeKey" ] && pass "plugin installed" || fail "plugin missing at $PLUG"
+expect_rc 0 "plugin signature verifies" codesign --verify --strict "$PLUG"
+expect_rc 0 "status (nothing enabled yet)" ridgekey-admin status
+expect_out "none" "no rights enabled after install"
+expect_rc 0 "selftest: macOS loads and runs RidgeKey.bundle" sudo ridgekey-admin selftest
+expect_out "selftest: ok" "plugin mechanism ran"
+
+# A throwaway admin-password right, shaped like authenticate-admin-nonshared.
+printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+  '<plist version="1.0"><dict><key>class</key><string>user</string><key>group</key><string>admin</string>' \
+  '<key>shared</key><false/><key>timeout</key><integer>0</integer>' \
+  '<key>comment</key><string>RidgeKey CI test right</string></dict></plist>' > "$WORK/citest.plist"
+expect_rc 0 "create test right" sudo security authorizationdb write "$CIR" < "$WORK/citest.plist"
+CI_BEFORE="$(dump_right "$CIR")"
+SP_BEFORE="$(dump_right system.preferences)"
+expect_rc 1 "test right before: denied without interaction" sudo /usr/local/ridgekey/bin/ridgekey-authcheck "$CIR"
+
+expect_rc 0 "enable the test right + system.preferences" sudo ridgekey-admin enable "$CIR" system.preferences
+expect_out "ok $CIR" "test right switched"
+dump_right "$CIR" | grep -q "<string>$FPR</string>" && pass "test right now tries the fingerprint first" \
+  || fail "test right does not reference $FPR"
+dump_right "$CIR" | grep -q "<string>io.github.labrouss.ridgekey.orig.$CIR</string>" && pass "original kept as fallback" \
+  || fail "fallback to the original rule missing"
+expect_rc 0 "enable again is a no-op" sudo ridgekey-admin enable "$CIR"
+expect_out "already enabled" "idempotent"
+expect_rc 1 "a non-admin right is refused" sudo ridgekey-admin enable system.login.console
+expect_out "skipped" "refusal explained"
+# The full chain, for real: fingerprint rule -> plugin -> ridgekeyd (no sensor / no prints) ->
+# Deny -> authd falls back to the original rule -> no UI allowed -> denied. Exit 2 here would
+# mean an internal error, i.e. the password fallback would NOT appear for a real user.
+T0=$(date +%s)
+expect_rc 1 "wrapped right: plugin denies, fallback runs, no internal error" \
+  sudo perl -e 'alarm 60; exec @ARGV' /usr/local/ridgekey/bin/ridgekey-authcheck "$CIR"
+T1=$(date +%s); [ $((T1 - T0)) -lt 45 ] && pass "answered in $((T1 - T0))s" || fail "took $((T1 - T0))s"
+log show --last 2m --style compact --predicate 'subsystem == "io.github.labrouss.ridgekey"' 2>/dev/null \
+  | tail -5 | sed 's/^/       | /' || true
+expect_rc 1 "authorize as root: refused cleanly (no enrolled admin on the runner)" \
+  sudo ridgekeyctl authorize ci-test
+expect_rc 1 "authorize refused for non-root" ridgekeyctl authorize ci-test
+expect_out "only available to root" "non-root refused"
+expect_rc 0 "status lists the enabled rights" ridgekey-admin status
+expect_out "on   $CIR" "status shows the test right"
+
 expect_rc 0 "upgrade in place while enabled" sudo "$B/install.sh"
+expect_out "checking the new plugin" "installer re-checked the plugin"
+expect_out "selftest: ok" "plugin still loads after upgrade"
 LEAF2="$(codesign -dr - "$AG" 2>&1 | grep -o 'certificate leaf = H"[0-9a-f]*"' || true)"
 if [ -n "$LEAF1" ] && [ "$LEAF1" = "$LEAF2" ]; then
   pass "reinstall keeps the same signing certificate (Accessibility survives upgrades)"
@@ -164,6 +223,14 @@ sudo tail -30 /Library/Logs/RidgeKey/ridgekeyd.log 2>/dev/null || true
 echo "== uninstall"
 expect_rc 0 "uninstall --purge (disables sudo first)" sudo "$B/uninstall.sh" --purge
 expect_out "Removing fingerprint from sudo" "sudo_local cleaned before files removed"
+expect_out "Restoring the normal admin dialogs" "admin rules restored before files removed"
+[ "$(dump_right "$CIR")" = "$CI_BEFORE" ] && pass "test right restored exactly" || fail "test right differs after uninstall"
+[ "$(dump_right system.preferences)" = "$SP_BEFORE" ] && pass "system.preferences restored exactly" \
+  || { fail "system.preferences differs after uninstall"; diff <(echo "$SP_BEFORE") <(dump_right system.preferences) || true; }
+dump_right "io.github.labrouss.ridgekey.orig.$CIR" >/dev/null 2>&1 && fail "orig copy left behind" || pass "orig copy removed"
+dump_right "$FPR" >/dev/null 2>&1 && fail "fingerprint rule left behind" || pass "fingerprint rule removed"
+[ ! -e "$PLUG" ] && pass "plugin removed" || fail "plugin still installed"
+sudo security authorizationdb remove "$CIR" >/dev/null 2>&1 || true
 if grep -q pam_ridgekey /etc/pam.d/sudo_local 2>/dev/null; then fail "sudo_local still mentions pam_ridgekey"; else pass "sudo_local clean"; fi
 expect_rc 0 "sudo works after uninstall" sudo -n true
 [ ! -e /usr/local/ridgekey ] && pass "files removed" || fail "/usr/local/ridgekey still there"
