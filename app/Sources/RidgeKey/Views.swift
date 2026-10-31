@@ -65,7 +65,7 @@ struct ContentView: View {
             }
         }
         .task { await model.refresh() }
-        .sheet(isPresented: $model.enrolling) { EnrollSheet() }
+        .sheet(item: $model.activity) { ActivitySheet(action: $0) }
     }
 }
 
@@ -168,7 +168,7 @@ struct FingerprintsView: View {
                         Label(RK.label(f), systemImage: "touchid")
                         Spacer()
                         Button(role: .destructive) {
-                            model.pendingAction = .delete(f)
+                            model.request(.delete(f))
                         } label: {
                             Image(systemName: "trash")
                         }
@@ -183,7 +183,7 @@ struct FingerprintsView: View {
                         Text(RK.label(f) + (model.fingers.contains(f) ? " (replace)" : "")).tag(f)
                     }
                 }
-                Button("Enroll…") { model.pendingAction = .enroll(finger) }
+                Button("Enroll…") { model.request(.enroll(finger)) }
                     .disabled(!model.reachable || model.sensor.isEmpty)
                 if !model.fingerprintsMessage.isEmpty {
                     Text(model.fingerprintsMessage).foregroundStyle(.secondary)
@@ -199,7 +199,7 @@ struct FingerprintsView: View {
     }
 }
 
-/// Enroll and delete ask "is it you?" first: an already enrolled finger, or the login password.
+/// No finger enrolled yet: the login password confirms enroll / delete.
 struct ConfirmSheet: View {
     @EnvironmentObject var model: AppModel
     let action: AppModel.PendingAction
@@ -209,44 +209,63 @@ struct ConfirmSheet: View {
         VStack(spacing: 14) {
             Image(systemName: "lock.shield").font(.system(size: 44)).foregroundStyle(Color.accentColor)
             Text(action.title).font(.headline)
-            Text("Confirm it is you first.").foregroundStyle(.secondary)
-            if !model.fingers.isEmpty {
-                Button("Use an enrolled finger") { model.perform(action, .finger) }
-                    .keyboardShortcut(.defaultAction)
-                Text("or your login password:").font(.caption).foregroundStyle(.secondary)
-            }
+            Text("Confirm with your login password.").foregroundStyle(.secondary)
             SecureField("Login password", text: $password)
                 .onSubmit { if !password.isEmpty { model.perform(action, .password(password)) } }
             HStack {
                 Button("Cancel", role: .cancel) { model.pendingAction = nil }
                     .keyboardShortcut(.cancelAction)
-                Button("Confirm with password") { model.perform(action, .password(password)) }
+                Button("Continue") { model.perform(action, .password(password)) }
+                    .keyboardShortcut(.defaultAction)
                     .disabled(password.isEmpty)
             }
         }
         .padding(24)
-        .frame(width: 360)
+        .frame(width: 340)
     }
 }
 
-struct EnrollSheet: View {
+/// Enroll / delete in progress. While confirming it listens for an enrolled finger AND takes a
+/// password - whichever comes first.
+struct ActivitySheet: View {
     @EnvironmentObject var model: AppModel
+    let action: AppModel.PendingAction
+    @State private var password = ""
 
     var body: some View {
         VStack(spacing: 16) {
             Image(systemName: model.confirming ? "lock.shield" : "touchid")
                 .font(.system(size: 56))
                 .foregroundStyle(model.fingerOnSensor ? Color.accentColor : Color.secondary)
-            Text(model.confirming ? "Confirm it is you"
-                                  : "Enrolling \(RK.label(model.enrollFinger).lowercased())").font(.headline)
-            ProgressView(value: Double(model.enrollStage), total: Double(max(model.enrollStages, 1)))
-            Text("\(model.enrollStage) of \(model.enrollStages)").font(.caption).foregroundStyle(.secondary)
+            Text(model.confirming ? "\(action.title) - confirm it is you" : action.title).font(.headline)
+            if case .enroll = action, !model.confirming {
+                ProgressView(value: Double(model.enrollStage), total: Double(max(model.enrollStages, 1)))
+                Text("\(model.enrollStage) of \(model.enrollStages)").font(.caption).foregroundStyle(.secondary)
+            }
             Text(model.enrollMessage).multilineTextAlignment(.center)
-            Button("Cancel", role: .cancel) { model.cancelEnroll() }
-                .keyboardShortcut(.cancelAction)
+            if model.confirming {
+                SecureField("Login password", text: $password)
+                    .onSubmit(submit)
+            }
+            HStack {
+                Button("Cancel", role: .cancel) { model.cancelActivity() }
+                    .keyboardShortcut(.cancelAction)
+                if model.confirming {
+                    Button("Use password", action: submit)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(password.isEmpty)
+                }
+            }
         }
         .padding(24)
         .frame(width: 380)
+        .interactiveDismissDisabled()
+    }
+
+    private func submit() {
+        let pw = password
+        password = ""
+        if !pw.isEmpty { model.usePassword(pw) }
     }
 }
 

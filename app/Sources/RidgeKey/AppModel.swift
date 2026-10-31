@@ -45,15 +45,38 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    /// Password-only confirmation sheet (no finger enrolled yet).
     @Published var pendingAction: PendingAction?
-    @Published var confirming = false      // waiting for the confirming finger
+    /// The enroll / delete running in the activity sheet.
+    @Published var activity: PendingAction?
+    @Published var confirming = false      // waiting for the confirming finger (or a password)
+    private var currentOperation: RKOperation?
+    private var restartWith: Confirmation?
+
+    /// Enroll / delete button: with an enrolled finger, start listening for it right away (the
+    /// sheet also takes a password); without one, ask for the password first.
+    func request(_ action: PendingAction) {
+        if fingers.isEmpty {
+            pendingAction = action
+        } else {
+            run(action, .finger)
+        }
+    }
 
     func perform(_ action: PendingAction, _ confirmation: Confirmation) {
         pendingAction = nil
-        switch action {
-        case .enroll(let f): startEnroll(f, confirmation)
-        case .delete(let f): Task { await delete(f, confirmation) }
-        }
+        run(action, confirmation)
+    }
+
+    /// Typed a password while the finger confirmation was waiting: stop that and redo with it.
+    func usePassword(_ password: String) {
+        restartWith = .password(password)
+        currentOperation?.cancel()
+    }
+
+    func cancelActivity() {
+        restartWith = nil
+        currentOperation?.cancel()
     }
 
     private func authFields(_ c: Confirmation) -> [String: Any] {
@@ -73,13 +96,11 @@ final class AppModel: ObservableObject {
     }
 
     // enrollment in progress
-    @Published var enrolling = false
     @Published var enrollFinger = ""
     @Published var enrollStage = 0
     @Published var enrollStages = 8
     @Published var enrollMessage = ""
     @Published var fingerOnSensor = false
-    private var enrollOperation: RKOperation?
 
     // one-line results shown in the views
     @Published var verifyResult = ""
@@ -132,39 +153,50 @@ final class AppModel: ObservableObject {
 
     // MARK: enroll / delete
 
-    func startEnroll(_ finger: String, _ confirmation: Confirmation) {
+    private func run(_ action: PendingAction, _ confirmation: Confirmation) {
+        let (op, finger): (String, String)
+        switch action {
+        case .enroll(let f): (op, finger) = ("enroll", f)
+        case .delete(let f): (op, finger) = ("delete", f)
+        }
+        let label = RK.label(finger).lowercased()
         enrollFinger = finger
         enrollStage = 0
         enrollStages = 8
+        fingerOnSensor = false
         if case .finger = confirmation {
             confirming = true
-            enrollMessage = "Confirm it is you: touch one of your enrolled fingers."
+            enrollMessage = "Touch one of your enrolled fingers - or type your login password."
         } else {
             confirming = false
-            enrollMessage = "Touch the sensor with your \(RK.label(finger).lowercased()) finger."
+            enrollMessage = op == "enroll" ? "Touch the sensor with your \(label) finger." : "Deleting…"
         }
-        fingerOnSensor = false
-        enrolling = true
+        activity = action
         Task {
             let r = await RKClient.call(
-                (["op": "enroll", "finger": finger] as [String: Any]).merging(authFields(confirmation)) { $1 },
-                onStart: { [weak self] op in self?.enrollOperation = op },
-                onEvent: { [weak self] event in self?.handleEnrollEvent(event) })
-            enrollOperation = nil
-            enrolling = false
+                (["op": op, "finger": finger] as [String: Any]).merging(authFields(confirmation)) { $1 },
+                onStart: { [weak self] o in self?.currentOperation = o },
+                onEvent: { [weak self] event in self?.handleEvent(event) })
+            currentOperation = nil
+            if r.error == "cancelled", let next = restartWith {
+                restartWith = nil
+                run(action, next)          // same sheet, now with the typed password
+                return
+            }
+            activity = nil
             confirming = false
             if r.ok {
-                fingerprintsMessage = "✓ Enrolled \(RK.label(finger).lowercased())."
+                fingerprintsMessage = op == "enroll" ? "✓ Enrolled \(label)." : "✓ Deleted \(label)."
             } else if r.error == "cancelled" {
-                fingerprintsMessage = "Enrollment cancelled."
+                fingerprintsMessage = "Cancelled."
             } else {
-                fingerprintsMessage = "Enrollment failed: \(explain(r))"
+                fingerprintsMessage = (op == "enroll" ? "Enrollment failed: " : "Delete failed: ") + explain(r)
             }
             await refresh()
         }
     }
 
-    private func handleEnrollEvent(_ event: [String: Any]) {
+    private func handleEvent(_ event: [String: Any]) {
         switch event["event"] as? String {
         case "enroll-progress":
             enrollStage = event["stage"] as? Int ?? enrollStage
@@ -172,7 +204,11 @@ final class AppModel: ObservableObject {
             enrollMessage = enrollStage < enrollStages ? "Good. Lift your finger and touch again." : "Done."
         case "confirmed":
             confirming = false
-            enrollMessage = "Confirmed. Now touch the sensor with your \(RK.label(enrollFinger).lowercased()) finger."
+            if case .delete = activity {
+                enrollMessage = "Confirmed. Deleting…"
+            } else {
+                enrollMessage = "Confirmed. Now touch the sensor with your \(RK.label(enrollFinger).lowercased()) finger."
+            }
         case "retry":
             enrollMessage = (event["message"] as? String ?? "Try again") + " - touch again."
         case "finger":
@@ -180,19 +216,6 @@ final class AppModel: ObservableObject {
         default:
             break
         }
-    }
-
-    func cancelEnroll() {
-        enrollOperation?.cancel()
-    }
-
-    func delete(_ finger: String, _ confirmation: Confirmation) async {
-        if case .finger = confirmation {
-            fingerprintsMessage = "Touch one of your enrolled fingers to confirm…"
-        }
-        let r = await RKClient.call((["op": "delete", "finger": finger] as [String: Any]).merging(authFields(confirmation)) { $1 })
-        fingerprintsMessage = r.ok ? "Deleted \(RK.label(finger).lowercased())." : "Delete failed: \(explain(r))"
-        await refresh()
     }
 
     // MARK: lock-screen password
