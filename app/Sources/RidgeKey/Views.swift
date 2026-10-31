@@ -371,6 +371,25 @@ struct ActionsView: View {
     @State private var draft: [AppModel.FingerAction] = []
     @State private var loaded = false
 
+    /// Rows whose finger + gesture is used more than once (only one of them could ever run).
+    private var duplicateIDs: Set<UUID> {
+        let counts = Dictionary(grouping: draft, by: \.trigger).filter { $0.value.count > 1 }
+        return Set(counts.values.flatMap { $0.map(\.id) })
+    }
+
+    /// A new row with a finger + gesture nobody uses yet (single tap first, then double, triple, hold).
+    private func unusedTrigger() -> AppModel.FingerAction? {
+        let used = Set(draft.map(\.trigger))
+        for f in model.fingers {
+            for g in ["1", "2", "3", "hold"] {
+                var a = AppModel.FingerAction(finger: f, hold: false, seconds: 2, action: "lock", shortcut: "")
+                a.gesture = g
+                if !used.contains(a.trigger) { return a }
+            }
+        }
+        return nil
+    }
+
     var body: some View {
         Form {
             Section {
@@ -379,6 +398,11 @@ struct ActionsView: View {
                 }
                 ForEach($draft) { $a in
                     VStack(alignment: .leading, spacing: 6) {
+                        if duplicateIDs.contains(a.id) {
+                            Label("Same finger and gesture as another action - each can have one action",
+                                  systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption).foregroundStyle(.red)
+                        }
                         HStack {
                             Picker("", selection: $a.finger) {
                                 ForEach(model.fingers, id: \.self) { Text(RK.label($0)).tag($0) }
@@ -438,13 +462,12 @@ struct ActionsView: View {
                 }
                 HStack {
                     Button("Add action") {
-                        let f = model.fingers.first ?? "right-index"
-                        draft.append(.init(finger: f, hold: false, seconds: 2, action: "lock", shortcut: ""))
+                        if let next = unusedTrigger() { draft.append(next) }
                     }
-                    .disabled(model.fingers.isEmpty || draft.count >= 20)
+                    .disabled(model.fingers.isEmpty || draft.count >= 20 || unusedTrigger() == nil)
                     Spacer()
                     Button("Save…") { model.saveActions(draft) }
-                        .disabled(!model.reachable || draft == model.actions ||
+                        .disabled(!model.reachable || draft == model.actions || !duplicateIDs.isEmpty ||
                                   draft.contains { $0.action == "shortcut" && $0.shortcut.isEmpty })
                         .keyboardShortcut(.defaultAction)
                 }

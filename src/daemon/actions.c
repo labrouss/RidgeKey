@@ -86,6 +86,42 @@ rk_rule_validate (const RkRule *r, GError **error)
   return TRUE;
 }
 
+gboolean
+rk_rule_same_trigger (const RkRule *a, const RkRule *b)
+{
+  return a->finger == b->finger && a->hold == b->hold &&
+         (a->hold ? a->seconds == b->seconds : a->taps == b->taps);
+}
+
+static const char *
+gesture_label (const RkRule *r, char *buf, size_t len)
+{
+  if (r->hold)
+    g_snprintf (buf, len, "hold %u s", r->seconds);
+  else
+    g_snprintf (buf, len, "%s", r->taps == 3 ? "triple tap" : r->taps == 2 ? "double tap" : "tap");
+  return buf;
+}
+
+gboolean
+actions_check_unique (GPtrArray *rules, GError **error)
+{
+  guint i, j;
+  char buf[32];
+
+  for (i = 0; i < rules->len; i++)
+    for (j = i + 1; j < rules->len; j++)
+      if (rk_rule_same_trigger (g_ptr_array_index (rules, i), g_ptr_array_index (rules, j)))
+        {
+          const RkRule *r = g_ptr_array_index (rules, i);
+
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_EXISTS, "%s %s is set twice (rules %u and %u)",
+                       rk_finger_name (r->finger), gesture_label (r, buf, sizeof buf), i + 1, j + 1);
+          return FALSE;
+        }
+  return TRUE;
+}
+
 GPtrArray *
 actions_load (uid_t uid)
 {
@@ -110,10 +146,17 @@ actions_load (uid_t uid)
       r->taps = r->hold ? 1 : (guint) MAX (1, g_key_file_get_integer (kf, groups[i], "taps", NULL));
       r->action = g_key_file_get_string (kf, groups[i], "action", NULL);
       r->shortcut = g_key_file_get_string (kf, groups[i], "shortcut", NULL);
-      if (rk_rule_validate (r, NULL))
-        g_ptr_array_add (rules, r);
-      else
-        rk_rule_free (r);       /* a hand-edited, invalid rule is simply ignored */
+      {
+        gboolean dup = FALSE;
+        guint k;
+
+        for (k = 0; k < rules->len && !dup; k++)
+          dup = rk_rule_same_trigger (g_ptr_array_index (rules, k), r);
+        if (rk_rule_validate (r, NULL) && !dup)
+          g_ptr_array_add (rules, r);
+        else
+          rk_rule_free (r);     /* invalid or duplicate (hand-edited / older file): ignored */
+      }
     }
   return rules;
 }

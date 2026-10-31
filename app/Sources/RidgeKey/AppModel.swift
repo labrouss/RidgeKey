@@ -39,6 +39,9 @@ final class AppModel: ObservableObject {
         var action: String          // "lock" | "shortcut"
         var shortcut: String
 
+        /// What triggers it: finger + gesture. Each trigger can have one action.
+        var trigger: String { finger + "|" + (hold ? "hold-\(seconds)" : "tap-\(taps)") }
+
         /// Same rule = same content (ids are only for SwiftUI lists).
         static func == (a: FingerAction, b: FingerAction) -> Bool {
             a.finger == b.finger && a.hold == b.hold && (!a.hold || a.seconds == b.seconds)

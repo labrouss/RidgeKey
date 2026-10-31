@@ -1019,6 +1019,15 @@ parse_rules (Request *r, GPtrArray **out)
         }
       g_ptr_array_add (rules, rule);
     }
+  {
+    g_autoptr(GError) err = NULL;
+
+    if (!actions_check_unique (rules, &err))
+      {
+        reply_error (r, RK_ERR_BAD_REQUEST, "%s - each finger and gesture can have one action", err->message);
+        return FALSE;
+      }
+  }
   *out = g_steal_pointer (&rules);
   return TRUE;
 }

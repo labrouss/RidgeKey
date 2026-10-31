@@ -59,6 +59,15 @@ test_pick (void)
   p = actions_pick (rules, FP_FINGER_RIGHT_INDEX, 1.0, 1);  g_assert_null (p);       /* no rule for it */
   g_assert_cmpuint (actions_max_taps (rules, FP_FINGER_RIGHT_THUMB), ==, 2);
   g_assert_cmpuint (actions_max_taps (rules, FP_FINGER_LEFT_INDEX), ==, 1);
+  g_assert_true (actions_check_unique (rules, NULL));        /* tap, hold 2, hold 5, double: all different */
+  {
+    GError *e = NULL;
+    g_ptr_array_add (rules, rule (FP_FINGER_RIGHT_THUMB, TRUE, 2, "lock", NULL));   /* hold 2 again */
+    g_assert_false (actions_check_unique (rules, &e));
+    g_assert_nonnull (strstr (e->message, "right-thumb hold 2 s is set twice"));
+    g_error_free (e);
+    g_ptr_array_remove_index (rules, rules->len - 1);
+  }
   g_assert_true (actions_is_hold (rules, FP_FINGER_RIGHT_THUMB, 2.0));
   g_assert_false (actions_is_hold (rules, FP_FINGER_RIGHT_THUMB, 1.9));
 }
@@ -77,6 +86,17 @@ test_roundtrip (void)
   g_ptr_array_add (rules, rule (FP_FINGER_RIGHT_THUMB, TRUE, 2, "shortcut", "Work mode ✓"));
   ((RkRule *) rules->pdata[0])->taps = 2;
   g_assert_true (actions_save (501, rules, NULL));
+  {
+    /* a hand-edited file with a duplicate trigger: the later one is ignored */
+    g_autofree char *path = g_build_filename (root, "actions", "502.conf", NULL);
+    g_autoptr(GPtrArray) d = NULL;
+    g_assert_true (g_file_set_contents (path,
+        "[a]\nfinger=left-index\ngesture=tap\ntaps=1\naction=lock\n"
+        "[b]\nfinger=left-index\ngesture=tap\ntaps=1\naction=shortcut\nshortcut=X\n", -1, NULL));
+    d = actions_load (502);
+    g_assert_cmpuint (d->len, ==, 1);
+    g_assert_cmpstr (((RkRule *) d->pdata[0])->action, ==, "lock");
+  }
   back = actions_load (501);
   g_assert_cmpuint (back->len, ==, 2);
   g_assert_cmpint (((RkRule *) back->pdata[1])->seconds, ==, 2);

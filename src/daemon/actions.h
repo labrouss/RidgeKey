@@ -33,6 +33,11 @@ void       rk_rule_free (RkRule *rule);
 /* Validates one rule; on error returns FALSE with a message for the user. */
 gboolean   rk_rule_validate (const RkRule *rule, GError **error);
 
+/* Same trigger = same finger and same gesture (tap count, or hold seconds). */
+gboolean   rk_rule_same_trigger (const RkRule *a, const RkRule *b);
+/* FALSE (with a message naming the clash) if two rules share a trigger - only one could run. */
+gboolean   actions_check_unique (GPtrArray *rules, GError **error);
+
 /* Rules of uid (never NULL; empty when none). */
 GPtrArray *actions_load (uid_t uid);
 /* Replaces uid's rules (an empty array removes the file). */
