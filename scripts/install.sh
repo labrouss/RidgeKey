@@ -76,6 +76,25 @@ if [ -d "$SRC/RidgeKey.app" ]; then
   xattr -dr com.apple.quarantine /Applications/RidgeKey.app 2>/dev/null || true
 fi
 
+# Trusted clients: only these exact, installed programs may enroll/delete prints and manage the
+# stored password (ridgekeyd checks each caller's running code against the requirement recorded
+# here). Root-owned; rewritten on every install.
+echo "==> Recording the trusted RidgeKey clients"
+mkdir -p "$DEST/etc"
+TC_TMP="$(mktemp "$DEST/etc/.trusted-clients.XXXXXX")"
+for c in "$DEST/bin/ridgekeyctl" /Applications/RidgeKey.app; do
+  [ -e "$c" ] || continue
+  req="$(codesign -d -r- "$c" 2>&1 | sed -n 's/^designated => //p')"
+  if [ -n "$req" ]; then
+    printf '%s\t%s\n' "$c" "$req" >> "$TC_TMP"
+    echo "    $c"
+  else
+    echo "    WARNING: no code signature on $c - it will not be able to manage prints"
+  fi
+done
+chown root:wheel "$DEST/etc" "$TC_TMP"; chmod 755 "$DEST/etc"; chmod 644 "$TC_TMP"
+mv -f "$TC_TMP" "$DEST/etc/trusted-clients"
+
 mkdir -p /usr/local/bin
 ln -sf "$DEST/bin/ridgekeyctl" /usr/local/bin/ridgekeyctl
 ln -sf "$DEST/bin/ridgekey-sudo" /usr/local/bin/ridgekey-sudo

@@ -130,3 +130,102 @@ out:
   CFRelease (attrs);
   return ok;
 }
+
+/* ------------------------------------------------------------------------------------------ */
+/* trusted clients: the installed ridgekeyctl and RidgeKey.app                                 */
+
+/* RK_TRUSTED_CLIENTS (written by install.sh, root-owned): one "PATH<TAB>REQUIREMENT" per line,
+ * REQUIREMENT being the client's designated requirement at install time (for an ad-hoc build:
+ * its cdhash, i.e. exactly that binary). */
+gboolean
+peer_is_trusted_client (xpc_connection_t conn, char **name, GError **error)
+{
+  audit_token_t token;
+  CFDataRef token_data;
+  CFDictionaryRef attrs;
+  const void *keys[1];
+  const void *vals[1];
+  SecCodeRef code = NULL;
+  SecStaticCodeRef static_code = NULL;
+  SecRequirementRef req = NULL;
+  CFURLRef url = NULL;
+  char path[PATH_MAX] = "";
+  g_autofree char *contents = NULL;
+  g_auto(GStrv) lines = NULL;
+  const char *requirement = NULL;
+  gboolean ok = FALSE;
+  guint i;
+
+  if (!root_owned_chain (RK_TRUSTED_CLIENTS) ||
+      !g_file_get_contents (RK_TRUSTED_CLIENTS, &contents, NULL, NULL))
+    return fail (error, "the list of trusted RidgeKey clients is missing or not root-owned - reinstall RidgeKey");
+
+  xpc_connection_get_audit_token (conn, &token);
+  token_data = CFDataCreate (NULL, (const UInt8 *) &token, sizeof token);
+  keys[0] = kSecGuestAttributeAudit;
+  vals[0] = token_data;
+  attrs = CFDictionaryCreate (NULL, keys, vals, 1, &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+  CFRelease (token_data);
+
+  if (SecCodeCopyGuestWithAttributes (NULL, attrs, kSecCSDefaultFlags, &code) != errSecSuccess ||
+      SecCodeCopyStaticCode (code, kSecCSDefaultFlags, &static_code) != errSecSuccess ||
+      SecCodeCopyPath (static_code, kSecCSDefaultFlags, &url) != errSecSuccess ||
+      !CFURLGetFileSystemRepresentation (url, true, (UInt8 *) path, sizeof path))
+    {
+      fail (error, "cannot identify the calling program");
+      goto out;
+    }
+
+  lines = g_strsplit (contents, "\n", -1);
+  for (i = 0; lines[i]; i++)
+    {
+      char *tab = strchr (lines[i], '\t');
+
+      if (tab && (size_t) (tab - lines[i]) == strlen (path) && strncmp (lines[i], path, tab - lines[i]) == 0)
+        {
+          requirement = tab + 1;
+          break;
+        }
+    }
+  if (!requirement || !*requirement)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                   "%s is not a trusted RidgeKey client - use ridgekeyctl or the RidgeKey app", path);
+      goto out;
+    }
+  {
+    CFStringRef s = CFStringCreateWithCString (NULL, requirement, kCFStringEncodingUTF8);
+    OSStatus st = s ? SecRequirementCreateWithString (s, kSecCSDefaultFlags, &req) : errSecParam;
+
+    if (s)
+      CFRelease (s);
+    if (st != errSecSuccess)
+      {
+        fail (error, "the recorded signature of this client cannot be read - reinstall RidgeKey");
+        goto out;
+      }
+  }
+  /* The running code (not just the file) must satisfy the recorded requirement. */
+  if (SecCodeCheckValidity (code, kSecCSDefaultFlags, req) != errSecSuccess)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                   "%s does not match the signature recorded at install - reinstall RidgeKey", path);
+      goto out;
+    }
+  if (name)
+    *name = g_path_get_basename (path);
+  ok = TRUE;
+
+out:
+  if (req)
+    CFRelease (req);
+  if (url)
+    CFRelease (url);
+  if (static_code)
+    CFRelease (static_code);
+  if (code)
+    CFRelease (code);
+  CFRelease (attrs);
+  return ok;
+}

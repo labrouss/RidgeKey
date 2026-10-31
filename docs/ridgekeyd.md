@@ -213,10 +213,25 @@ this feature).
 | Operation | Who |
 |---|---|
 | status | anyone |
-| list, enroll, verify, delete | the user themselves (caller's effective uid); root for anyone |
+| list, verify | the user themselves (caller's effective uid); root for anyone |
+| **enroll, delete** | the user, through a **trusted client**, after **confirming**: an already enrolled finger of theirs, or their login password. Root: anyone, no confirmation |
+| **password-set, password-clear** | the user, through a **trusted client** (set also checks the password); root for anyone |
+| password-check | the user; root for anyone |
 | identify, purge | root only |
 | authorize | root only (the authorization plugin); console user present, screen unlocked |
+| unlock | the RidgeKey Agent only (path, signature, hardened runtime, root-owned) |
 | cancel | the client that started the operation; root |
+
+**Trusted clients** are the installed `/usr/local/ridgekey/bin/ridgekeyctl` and
+`/Applications/RidgeKey.app`. `install.sh` records each one's code signature (its designated
+requirement; for these ad-hoc signed builds that is the exact binary's hash) in the root-owned
+`/usr/local/ridgekey/etc/trusted-clients`. ridgekeyd checks the *running* caller against it, so a
+copy elsewhere, a modified binary or another program is refused (`untrusted-client`).
+
+**Confirmation** (enroll / delete): `ridgekeyctl` uses an enrolled finger when you have one,
+otherwise asks for your password (`--password` / `--finger` to choose, `--stdin` for scripts). The
+app shows a "Confirm it is you" sheet. Three wrong passwords lock that user's password checks for
+30 seconds (`locked-out`); the same limit applies to `password set`.
 
 ## Safety rules
 
@@ -235,11 +250,9 @@ the `finger`, `enroll-progress` and `retry` events, reply fields, and error code
 `no-device`, `permission`, `not-found`, `no-prints`, `timeout`, `cancelled`, `data-full`, `storage`,
 `failed`, `bad-request`).
 
-## Known limitations (0.5.0)
+## Known limitations (0.9.0)
 
-- **Callers are identified by their effective uid** (`xpc_connection_get_euid`). A later version
-  should check code signatures, for example to allow only the RidgeKey app to enroll.
-- **Enroll needs no password:** any process running as you can start an enrollment, but it still
-  needs a finger on the sensor. The GUI will ask for your password first.
+- **Verify is open to any process running as you** (it only answers "match / no match" for your
+  own prints, and sudo's PAM module needs it).
 - **The login window after a reboot (FileVault / first login) isn't covered;** that needs the
   password typed by hand once.

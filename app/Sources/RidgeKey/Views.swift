@@ -156,7 +156,6 @@ struct OverviewView: View {
 struct FingerprintsView: View {
     @EnvironmentObject var model: AppModel
     @State private var finger = RK.fingers[0]
-    @State private var pendingDelete: String?
 
     var body: some View {
         Form {
@@ -169,7 +168,7 @@ struct FingerprintsView: View {
                         Label(RK.label(f), systemImage: "touchid")
                         Spacer()
                         Button(role: .destructive) {
-                            pendingDelete = f
+                            model.pendingAction = .delete(f)
                         } label: {
                             Image(systemName: "trash")
                         }
@@ -184,7 +183,7 @@ struct FingerprintsView: View {
                         Text(RK.label(f) + (model.fingers.contains(f) ? " (replace)" : "")).tag(f)
                     }
                 }
-                Button("Enroll…") { model.startEnroll(finger) }
+                Button("Enroll…") { model.pendingAction = .enroll(finger) }
                     .disabled(!model.reachable || model.sensor.isEmpty)
                 if !model.fingerprintsMessage.isEmpty {
                     Text(model.fingerprintsMessage).foregroundStyle(.secondary)
@@ -196,14 +195,37 @@ struct FingerprintsView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
-        .confirmationDialog("Delete the \(RK.label(pendingDelete ?? "").lowercased()) fingerprint?",
-                            isPresented: Binding(get: { pendingDelete != nil },
-                                                 set: { if !$0 { pendingDelete = nil } })) {
-            Button("Delete", role: .destructive) {
-                if let f = pendingDelete { Task { await model.delete(f) } }
-                pendingDelete = nil
+        .sheet(item: $model.pendingAction) { ConfirmSheet(action: $0) }
+    }
+}
+
+/// Enroll and delete ask "is it you?" first: an already enrolled finger, or the login password.
+struct ConfirmSheet: View {
+    @EnvironmentObject var model: AppModel
+    let action: AppModel.PendingAction
+    @State private var password = ""
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "lock.shield").font(.system(size: 44)).foregroundStyle(Color.accentColor)
+            Text(action.title).font(.headline)
+            Text("Confirm it is you first.").foregroundStyle(.secondary)
+            if !model.fingers.isEmpty {
+                Button("Use an enrolled finger") { model.perform(action, .finger) }
+                    .keyboardShortcut(.defaultAction)
+                Text("or your login password:").font(.caption).foregroundStyle(.secondary)
+            }
+            SecureField("Login password", text: $password)
+                .onSubmit { if !password.isEmpty { model.perform(action, .password(password)) } }
+            HStack {
+                Button("Cancel", role: .cancel) { model.pendingAction = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button("Confirm with password") { model.perform(action, .password(password)) }
+                    .disabled(password.isEmpty)
             }
         }
+        .padding(24)
+        .frame(width: 360)
     }
 }
 
@@ -212,10 +234,11 @@ struct EnrollSheet: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "touchid")
+            Image(systemName: model.confirming ? "lock.shield" : "touchid")
                 .font(.system(size: 56))
                 .foregroundStyle(model.fingerOnSensor ? Color.accentColor : Color.secondary)
-            Text("Enrolling \(RK.label(model.enrollFinger).lowercased())").font(.headline)
+            Text(model.confirming ? "Confirm it is you"
+                                  : "Enrolling \(RK.label(model.enrollFinger).lowercased())").font(.headline)
             ProgressView(value: Double(model.enrollStage), total: Double(max(model.enrollStages, 1)))
             Text("\(model.enrollStage) of \(model.enrollStages)").font(.caption).foregroundStyle(.secondary)
             Text(model.enrollMessage).multilineTextAlignment(.center)

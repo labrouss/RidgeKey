@@ -19,6 +19,7 @@
 static xpc_connection_t conn;
 static dispatch_semaphore_t done;
 static int exit_code = 1;
+static const char *enroll_note;   /* printed once the enroll/delete confirmation is accepted */
 static int verbose = 0;
 
 static void
@@ -32,9 +33,14 @@ usage (FILE *f)
     "  status                  sensor and daemon status\n"
     "  list                    fingers RidgeKey has enrolled for the user\n"
     "  enroll FINGER           enroll a finger (replaces an earlier RidgeKey print of it)\n"
+    "                          first confirm it is you: an enrolled finger, or your password\n"
     "  verify [-t SECONDS]     match against the user's prints (exit 0 = match)\n"
     "  identify [-t SECONDS]   match against every user's prints (root only)\n"
     "  delete FINGER           delete one RidgeKey print from the sensor and the record\n"
+    "                          (confirmed like enroll)\n"
+    "    --password            confirm enroll/delete with your password (default when no finger\n"
+    "                          is enrolled yet; with --stdin it is read from standard input)\n"
+    "    --finger              confirm with an enrolled finger (default when you have one)\n"
     "  purge [--yes]           delete every RidgeKey print, one by one (root only)\n"
     "  password set            store your login password for lock-screen unlock\n"
     "                          (checked against your account, kept in the System keychain)\n"
@@ -76,6 +82,16 @@ handle_event (xpc_object_t ev)
       long long stages = xpc_dictionary_get_int64 (ev, RK_KEY_STAGES);
 
       printf ("  scan %lld/%lld ok%s\n", stage, stages, stage < stages ? " - lift and touch again" : "");
+    }
+  else if (strcmp (name, RK_EV_CONFIRM) == 0)
+    {
+      printf ("Confirm it is you: touch one of your enrolled fingers...\n");
+    }
+  else if (strcmp (name, RK_EV_CONFIRMED) == 0)
+    {
+      printf ("Confirmed.\n");
+      if (enroll_note)
+        printf ("%s", enroll_note);
     }
   else if (strcmp (name, RK_EV_RETRY) == 0)
     {
@@ -196,6 +212,8 @@ main (int argc, char **argv)
   const char *user = NULL, *op, *finger = NULL;
   long timeout = 0;
   int yes = 0, from_stdin = 0, opt;
+  int want_password = 0, want_finger = 0;
+  const char *auth = NULL;
   char password[1024] = "";
   xpc_object_t msg;
   dispatch_queue_t q;
@@ -227,6 +245,10 @@ main (int argc, char **argv)
         yes = 1;
       else if (strcmp (a, "--stdin") == 0)
         from_stdin = 1;
+      else if (strcmp (a, "--password") == 0)
+        want_password = 1;
+      else if (strcmp (a, "--finger") == 0)
+        want_finger = 1;
       else if (!finger)
         finger = a;
       else
@@ -321,8 +343,55 @@ main (int argc, char **argv)
   });
   dispatch_resume (sigint);
 
+  /* enroll / delete: confirm who is asking (root needs no confirmation) */
+  if ((strcmp (op, RK_OP_ENROLL) == 0 || strcmp (op, RK_OP_DELETE) == 0) && geteuid () != 0)
+    {
+      int has_fingers = 0;
+
+      if (!want_password && !want_finger)
+        {
+          xpc_object_t q = xpc_dictionary_create (NULL, NULL, 0), a;
+
+          xpc_dictionary_set_string (q, RK_KEY_OP, RK_OP_LIST);
+          a = xpc_connection_send_message_with_reply_sync (conn, q);
+          if (xpc_get_type (a) == XPC_TYPE_DICTIONARY && xpc_dictionary_get_bool (a, RK_KEY_OK))
+            {
+              xpc_object_t arr = xpc_dictionary_get_value (a, RK_KEY_FINGERS);
+              has_fingers = arr && xpc_array_get_count (arr) > 0;
+            }
+          xpc_release (a);
+          xpc_release (q);
+        }
+      if (want_finger || (!want_password && has_fingers))
+        auth = "finger";
+      else
+        {
+          auth = "password";
+          if (from_stdin)
+            {
+              size_t n;
+
+              if (!fgets (password, sizeof password, stdin))
+                password[0] = '\0';
+              n = strlen (password);
+              if (n && password[n - 1] == '\n')
+                password[n - 1] = '\0';
+            }
+          else if (!readpassphrase ("Confirm with your login password: ", password, sizeof password,
+                                    RPP_ECHO_OFF | RPP_REQUIRE_TTY))
+            password[0] = '\0';
+          if (!*password)
+            {
+              fprintf (stderr, "no password entered\n");
+              return 2;
+            }
+        }
+    }
+
   msg = xpc_dictionary_create (NULL, NULL, 0);
   xpc_dictionary_set_string (msg, RK_KEY_OP, op);
+  if (auth)
+    xpc_dictionary_set_string (msg, RK_KEY_AUTH, auth);
   if (user)
     xpc_dictionary_set_string (msg, RK_KEY_USER, user);
   if (finger && strcmp (op, RK_OP_AUTHORIZE) == 0)
@@ -344,7 +413,15 @@ main (int argc, char **argv)
     }
 
   if (strcmp (op, RK_OP_ENROLL) == 0)
-    printf ("Enrolling %s - touch the sensor, lift, and repeat until done.\n", finger);
+    {
+      static char note[160];
+
+      snprintf (note, sizeof note, "Enrolling %s - touch the sensor, lift, and repeat until done.\n", finger);
+      if (auth && strcmp (auth, "finger") == 0)
+        enroll_note = note;          /* shown after the confirmation */
+      else
+        printf ("%s", note);
+    }
   else if (strcmp (op, RK_OP_VERIFY) == 0 || strcmp (op, RK_OP_IDENTIFY) == 0 ||
            strcmp (op, RK_OP_AUTHORIZE) == 0)
     printf ("Touch the sensor...\n");

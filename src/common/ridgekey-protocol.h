@@ -39,7 +39,7 @@
 
 #include <string.h>
 
-#define RK_VERSION        "0.8.0"
+#define RK_VERSION        "0.9.0"
 #define RK_SERVICE_NAME   "io.github.labrouss.ridgekey"
 
 /* The only program allowed to receive the stored password (op "unlock"). */
@@ -47,6 +47,8 @@
  * "RidgeKey Agent" with the RidgeKey icon. */
 #define RK_AGENT_BUNDLE   "/usr/local/ridgekey/RidgeKeyAgent.app"
 #define RK_AGENT_PATH     RK_AGENT_BUNDLE "/Contents/MacOS/ridgekey-agent"
+/* Written by install.sh: the installed clients allowed to manage prints and stored passwords. */
+#define RK_TRUSTED_CLIENTS "/usr/local/ridgekey/etc/trusted-clients"
 
 /* verify / identify wait at most this long for a finger */
 #define RK_TIMEOUT_MAX_SECONDS 120
@@ -81,6 +83,7 @@
 #define RK_KEY_CLIENT          "client"   /* authorize: path of the app asking for it */
 #define RK_KEY_CLIENT_PID      "client-pid" /* authorize: pid of that app = authd's creator-pid (0 = unknown) */
 #define RK_KEY_CALLER_PID      "caller-pid" /* authorize: process that submitted the request (log only) */
+#define RK_KEY_AUTH            "auth"     /* enroll/delete: "password" (+ "password") or "finger" */
 #define RK_KEY_REUSED          "reused"   /* authorize reply: approved from a recent touch */
 
 /* operations */
@@ -108,6 +111,8 @@
 #define RK_EV_FINGER          "finger"
 #define RK_EV_ENROLL_PROGRESS "enroll-progress"
 #define RK_EV_RETRY           "retry"
+#define RK_EV_CONFIRM         "confirm"     /* enroll/delete: touch an enrolled finger to confirm */
+#define RK_EV_CONFIRMED       "confirmed"   /* confirmation accepted, the operation continues */
 
 /* error codes */
 #define RK_ERR_BAD_REQUEST "bad-request"
@@ -127,6 +132,10 @@
 #define RK_ERR_NOT_LOCKED   "not-locked"          /* unlock: not the locked console user */
 #define RK_ERR_NOT_ADMIN    "not-admin"           /* authorize: matched user is not an administrator */
 #define RK_ERR_NO_CONSOLE   "no-console"          /* authorize: nobody at the console, or screen locked */
+#define RK_ERR_AUTH_REQUIRED "auth-required"      /* enroll/delete: confirm with a password or an enrolled finger */
+#define RK_ERR_NO_MATCH     "no-match"            /* enroll/delete: the confirming finger is not enrolled */
+#define RK_ERR_LOCKED_OUT   "locked-out"          /* too many wrong passwords - wait */
+#define RK_ERR_UNTRUSTED    "untrusted-client"    /* not the installed ridgekeyctl / RidgeKey app */
 
 /* Finger names, indexed by libfprint's FpFinger (1..10). Index 0 = unknown. */
 static const char *const rk_finger_names[] = {

@@ -47,6 +47,9 @@
  * asks 4 times). After a touch, the SAME process gets those follow-ups without another touch. */
 #define RK_REUSE_SECONDS        15
 #define RK_REUSE_MAX            6
+#define RK_CONFIRM_MISSES       3      /* enroll/delete confirmation: tries with an enrolled finger */
+#define RK_PW_MAX_FAILS         3      /* wrong passwords before a lockout */
+#define RK_PW_LOCKOUT_SECONDS   30
 
 /* ------------------------------------------------------------------------------------------ */
 /* Requests                                                                                    */
@@ -145,7 +148,8 @@ typedef struct {
   char         *right;          /* authorize: right being requested (for the log) */
   char         *client;         /* authorize: requesting app's path */
   gint64        client_pid;     /* authorize: requesting app's pid (0 = unknown) */
-  gint          misses;         /* authorize: fingers that matched nobody */
+  gint          misses;         /* authorize / confirm: fingers that matched nobody */
+  gboolean      confirm;        /* enroll/delete: first match one of the user's enrolled fingers */
 
   GError       *error;          /* final error, if any */
   const char   *err_code;       /* overrides the code derived from error */
@@ -662,6 +666,59 @@ purge_next (Op *op)
 /* ------------------------------------------------------------------------------------------ */
 /* operation start                                                                             */
 
+static void op_after_open (Op *op);
+
+/* enroll/delete confirmation: one of the user's own enrolled fingers must match first. */
+static void
+on_confirm_identified (GObject *src, GAsyncResult *res, gpointer data)
+{
+  Op *op = data;
+  GError *err = NULL;
+  g_autoptr(FpPrint) match = NULL;
+  g_autoptr(FpPrint) scanned = NULL;
+  xpc_object_t ev;
+
+  if (!fp_device_identify_finish (FP_DEVICE (src), res, &match, &scanned, &err))
+    {
+      if (err->domain == FP_DEVICE_RETRY && op->retries < RK_MAX_RETRIES &&
+          !g_cancellable_is_cancelled (op->cancel))
+        {
+          op->retries++;
+          send_retry (op, err);
+          g_error_free (err);
+          fp_device_identify (op->dev, op->gallery, op->cancel, NULL, NULL, NULL, on_confirm_identified, op);
+          return;
+        }
+      op_finish (op, err);
+      return;
+    }
+  if (!match)
+    {
+      if (++op->misses < RK_CONFIRM_MISSES && !g_cancellable_is_cancelled (op->cancel))
+        {
+          GError *e = g_error_new (G_IO_ERROR, G_IO_ERROR_FAILED,
+                                   "not one of your enrolled fingers - try again (%d of %d)",
+                                   op->misses + 1, RK_CONFIRM_MISSES);
+          send_retry (op, e);
+          g_error_free (e);
+          fp_device_identify (op->dev, op->gallery, op->cancel, NULL, NULL, NULL, on_confirm_identified, op);
+          return;
+        }
+      op->err_code = RK_ERR_NO_MATCH;
+      op_finish (op, g_error_new (G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                                  "confirmation failed: no enrolled finger of %s matched", op->username));
+      return;
+    }
+  g_message ("%s for %s: confirmed with %s", op_names[op->kind], op->username,
+             rk_finger_name (fp_print_get_finger (match)));
+  ev = xpc_dictionary_create (NULL, NULL, 0);
+  xpc_dictionary_set_string (ev, RK_KEY_EVENT, RK_EV_CONFIRMED);
+  send_event (op, ev);
+  op->confirm = FALSE;
+  op->retries = 0;
+  op_after_open (op);
+}
+
 static void
 on_opened (GObject *src, GAsyncResult *res, gpointer data)
 {
@@ -674,6 +731,21 @@ on_opened (GObject *src, GAsyncResult *res, gpointer data)
       return;
     }
   op->opened = TRUE;
+  op_after_open (op);
+}
+
+static void
+op_after_open (Op *op)
+{
+  if (op->confirm)
+    {
+      xpc_object_t ev = xpc_dictionary_create (NULL, NULL, 0);
+
+      xpc_dictionary_set_string (ev, RK_KEY_EVENT, RK_EV_CONFIRM);
+      send_event (op, ev);
+      fp_device_identify (op->dev, op->gallery, op->cancel, NULL, NULL, NULL, on_confirm_identified, op);
+      return;
+    }
 
   switch (op->kind)
     {
@@ -715,6 +787,72 @@ resolve_user (Request *r, uid_t *uid, char **name)
   *uid = pw->pw_uid;
   *name = g_strdup (pw->pw_name);
   return TRUE;
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/* password checks with a lockout (enroll/delete confirmation, password-set)                  */
+
+typedef struct { gint fails; gint64 until; } PwState;
+static GHashTable *pw_states;   /* uid -> PwState* */
+
+/* Checks password for user uid. On failure replies (bad-password / locked-out) and returns FALSE. */
+static gboolean
+check_password (Request *r, uid_t uid, const char *user, const char *password)
+{
+  g_autoptr(GError) err = NULL;
+  PwState *st;
+  gint64 now = g_get_monotonic_time ();
+
+  if (!pw_states)
+    pw_states = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+  st = g_hash_table_lookup (pw_states, GUINT_TO_POINTER (uid));
+  if (st && st->until > now)
+    {
+      reply_error (r, RK_ERR_LOCKED_OUT, "too many wrong passwords - try again in %d s",
+                   (int) ((st->until - now) / G_USEC_PER_SEC) + 1);
+      return FALSE;
+    }
+  if (!password || !*password)
+    {
+      reply_error (r, RK_ERR_AUTH_REQUIRED, "missing password");
+      return FALSE;
+    }
+  if (secret_validate (user, password, &err))
+    {
+      g_hash_table_remove (pw_states, GUINT_TO_POINTER (uid));
+      return TRUE;
+    }
+  if (!st)
+    {
+      st = g_new0 (PwState, 1);
+      g_hash_table_insert (pw_states, GUINT_TO_POINTER (uid), st);
+    }
+  if (++st->fails >= RK_PW_MAX_FAILS)
+    {
+      st->fails = 0;
+      st->until = now + (gint64) RK_PW_LOCKOUT_SECONDS * G_USEC_PER_SEC;
+      g_warning ("uid %u: %d wrong passwords for %s - locked for %d s", (unsigned) r->caller,
+                 RK_PW_MAX_FAILS, user, RK_PW_LOCKOUT_SECONDS);
+    }
+  reply_error (r, g_error_matches (err, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED)
+                  ? RK_ERR_BAD_PASSWORD : RK_ERR_FAILED, "%s", err->message);
+  return FALSE;
+}
+
+/* Non-root callers must be an installed RidgeKey client for print / password management. */
+static gboolean
+require_trusted (Request *r, const char *what)
+{
+  g_autoptr(GError) err = NULL;
+  g_autofree char *name = NULL;
+
+  if (r->caller == 0)
+    return TRUE;
+  if (peer_is_trusted_client (r->conn, &name, &err))
+    return TRUE;
+  g_warning ("uid %u: %s refused: %s", (unsigned) r->caller, what, err->message);
+  reply_error (r, RK_ERR_UNTRUSTED, "%s", err->message);
+  return FALSE;
 }
 
 /* Returns the started operation (now `current`), or NULL after replying with an error. */
@@ -763,6 +901,47 @@ start_op (Request *r, OpKind kind)
           return NULL;
         }
       op->finger = (FpFinger) finger;
+
+      /* 0.9: only installed clients, and only after confirming who is asking - the user's
+       * password, or one of their already enrolled fingers. Root is exempt. */
+      if (!require_trusted (r, op_names[kind]))
+        {
+          op_free (op);
+          return NULL;
+        }
+      if (r->caller != 0)
+        {
+          const char *auth = xpc_dictionary_get_string (r->msg, RK_KEY_AUTH);
+
+          if (auth && strcmp (auth, "finger") == 0)
+            {
+              op->gallery = store_load_user (op->uid);
+              if (op->gallery->len == 0)
+                {
+                  reply_error (r, RK_ERR_AUTH_REQUIRED,
+                               "%s has no enrolled finger yet - confirm with your password", op->username);
+                  op_free (op);
+                  return NULL;
+                }
+              op->confirm = TRUE;
+            }
+          else if (auth && strcmp (auth, "password") == 0)
+            {
+              if (!check_password (r, op->uid, op->username,
+                                   xpc_dictionary_get_string (r->msg, RK_KEY_PASSWORD)))
+                {
+                  op_free (op);
+                  return NULL;
+                }
+            }
+          else
+            {
+              reply_error (r, RK_ERR_AUTH_REQUIRED,
+                           "confirm with your password or an enrolled finger (auth = password | finger)");
+              op_free (op);
+              return NULL;
+            }
+        }
     }
 
   switch (kind)
@@ -935,17 +1114,15 @@ do_password_set (Request *r)
 
   if (!resolve_user (r, &uid, &name))
     return;
+  if (!require_trusted (r, "password-set"))
+    return;
   if (!password || !*password)
     {
       reply_error (r, RK_ERR_BAD_REQUEST, "missing password");
       return;
     }
-  if (!secret_validate (name, password, &err))
-    {
-      reply_error (r, g_error_matches (err, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED)
-                      ? RK_ERR_BAD_PASSWORD : RK_ERR_FAILED, "%s", err->message);
-      return;
-    }
+  if (!check_password (r, uid, name, password))
+    return;
   if (!secret_store (name, password, &err))
     {
       reply_error (r, RK_ERR_STORAGE, "%s", err->message);
@@ -1146,6 +1323,8 @@ do_password_clear (Request *r)
   xpc_object_t reply;
 
   if (!resolve_user (r, &uid, &name))
+    return;
+  if (!require_trusted (r, "password-clear"))
     return;
   if (!secret_clear (name, &err))
     {

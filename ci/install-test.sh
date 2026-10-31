@@ -48,10 +48,32 @@ expect_out "permission" "identify is root-only"
 expect_rc 1 "list for another user refused" ridgekeyctl -u root list
 expect_out "permission" "other users need root"
 expect_rc 0 "root may list another user" sudo ridgekeyctl -u "$ME" list
-expect_rc 1 "enroll without a sensor" ridgekeyctl enroll right-index
+expect_rc 1 "enroll without a sensor (root: no confirmation needed)" sudo ridgekeyctl -u "$ME" enroll right-index
 expect_out "no-device" "enroll reports no-device"
-expect_rc 1 "delete of a print that is not recorded" ridgekeyctl delete left-thumb
+expect_rc 1 "delete of a print that is not recorded (root)" sudo ridgekeyctl -u "$ME" delete left-thumb
 expect_out "not-found" "delete reports not-found"
+
+echo "== 0.9: confirmation before enroll/delete, trusted clients"
+[ -f /usr/local/ridgekey/etc/trusted-clients ] && pass "trusted-clients recorded" || fail "no trusted-clients file"
+sudo cat /usr/local/ridgekey/etc/trusted-clients | sed 's/^/       | /'
+grep -q "^/usr/local/ridgekey/bin/ridgekeyctl	" /usr/local/ridgekey/etc/trusted-clients \
+  && pass "ridgekeyctl is trusted" || fail "ridgekeyctl missing from trusted-clients"
+grep -q "^/Applications/RidgeKey.app	" /usr/local/ridgekey/etc/trusted-clients \
+  && pass "RidgeKey.app is trusted" || fail "RidgeKey.app missing from trusted-clients"
+expect_rc 1 "enroll with --finger but no finger enrolled" ridgekeyctl enroll right-index --finger
+expect_out "auth-required" "a first finger needs the password"
+expect_rc 1 "enroll with a wrong password" sh -c 'echo not-the-password | ridgekeyctl enroll right-index --password --stdin'
+expect_out "bad-password" "wrong password refused"
+expect_rc 1 "second wrong password" sh -c 'echo nope2 | ridgekeyctl delete left-thumb --password --stdin'
+expect_rc 1 "third wrong password" sh -c 'echo nope3 | ridgekeyctl enroll right-index --password --stdin'
+expect_rc 1 "fourth attempt is locked out" sh -c 'echo nope4 | ridgekeyctl enroll right-index --password --stdin'
+expect_out "locked-out" "lockout after 3 wrong passwords"
+cp /usr/local/ridgekey/bin/ridgekeyctl "$WORK/rkctl-copy"
+expect_rc 1 "a copy of ridgekeyctl elsewhere is not trusted" sh -c "echo x | '$WORK/rkctl-copy' enroll right-index --password --stdin"
+expect_out "untrusted-client" "untrusted copy refused"
+expect_rc 1 "untrusted copy cannot set a password either" sh -c "echo x | '$WORK/rkctl-copy' password set --stdin"
+expect_out "untrusted-client" "password-set needs a trusted client"
+expect_rc 0 "untrusted copy may still read status" "$WORK/rkctl-copy" status
 expect_rc 2 "unknown finger rejected by client" ridgekeyctl enroll left-toe
 expect_rc 0 "purge with nothing recorded" sudo ridgekeyctl purge --yes
 expect_out "deleted 0" "purge deletes nothing"

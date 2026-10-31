@@ -28,6 +28,50 @@ final class AppModel: ObservableObject {
     @Published var adminEnabled = false
     @Published var adminMessage = ""
 
+    // enroll / delete need a confirmation (0.9): an enrolled finger or the login password
+    enum Confirmation { case finger, password(String) }
+    enum PendingAction: Identifiable {
+        case enroll(String), delete(String)
+        var id: String {
+            switch self {
+            case .enroll(let f): return "enroll-" + f
+            case .delete(let f): return "delete-" + f
+            }
+        }
+        var title: String {
+            switch self {
+            case .enroll(let f): return "Enroll \(RK.label(f).lowercased())"
+            case .delete(let f): return "Delete \(RK.label(f).lowercased())"
+            }
+        }
+    }
+    @Published var pendingAction: PendingAction?
+    @Published var confirming = false      // waiting for the confirming finger
+
+    func perform(_ action: PendingAction, _ confirmation: Confirmation) {
+        pendingAction = nil
+        switch action {
+        case .enroll(let f): startEnroll(f, confirmation)
+        case .delete(let f): Task { await delete(f, confirmation) }
+        }
+    }
+
+    private func authFields(_ c: Confirmation) -> [String: Any] {
+        switch c {
+        case .finger: return ["auth": "finger"]
+        case .password(let pw): return ["auth": "password", "password": pw]
+        }
+    }
+
+    private func explain(_ r: RKReply) -> String {
+        switch r.error {
+        case "bad-password": return "that is not your login password"
+        case "no-match": return "the finger is not one of your enrolled fingers"
+        case "untrusted-client": return "only the installed RidgeKey app may do this - reinstall RidgeKey"
+        default: return r.message
+        }
+    }
+
     // enrollment in progress
     @Published var enrolling = false
     @Published var enrollFinger = ""
@@ -88,26 +132,33 @@ final class AppModel: ObservableObject {
 
     // MARK: enroll / delete
 
-    func startEnroll(_ finger: String) {
+    func startEnroll(_ finger: String, _ confirmation: Confirmation) {
         enrollFinger = finger
         enrollStage = 0
         enrollStages = 8
-        enrollMessage = "Touch the sensor with your \(RK.label(finger).lowercased()) finger."
+        if case .finger = confirmation {
+            confirming = true
+            enrollMessage = "Confirm it is you: touch one of your enrolled fingers."
+        } else {
+            confirming = false
+            enrollMessage = "Touch the sensor with your \(RK.label(finger).lowercased()) finger."
+        }
         fingerOnSensor = false
         enrolling = true
         Task {
             let r = await RKClient.call(
-                ["op": "enroll", "finger": finger],
+                (["op": "enroll", "finger": finger] as [String: Any]).merging(authFields(confirmation)) { $1 },
                 onStart: { [weak self] op in self?.enrollOperation = op },
                 onEvent: { [weak self] event in self?.handleEnrollEvent(event) })
             enrollOperation = nil
             enrolling = false
+            confirming = false
             if r.ok {
                 fingerprintsMessage = "✓ Enrolled \(RK.label(finger).lowercased())."
             } else if r.error == "cancelled" {
                 fingerprintsMessage = "Enrollment cancelled."
             } else {
-                fingerprintsMessage = "Enrollment failed: \(r.message)"
+                fingerprintsMessage = "Enrollment failed: \(explain(r))"
             }
             await refresh()
         }
@@ -119,6 +170,9 @@ final class AppModel: ObservableObject {
             enrollStage = event["stage"] as? Int ?? enrollStage
             enrollStages = max(event["stages"] as? Int ?? enrollStages, 1)
             enrollMessage = enrollStage < enrollStages ? "Good. Lift your finger and touch again." : "Done."
+        case "confirmed":
+            confirming = false
+            enrollMessage = "Confirmed. Now touch the sensor with your \(RK.label(enrollFinger).lowercased()) finger."
         case "retry":
             enrollMessage = (event["message"] as? String ?? "Try again") + " - touch again."
         case "finger":
@@ -132,9 +186,12 @@ final class AppModel: ObservableObject {
         enrollOperation?.cancel()
     }
 
-    func delete(_ finger: String) async {
-        let r = await RKClient.call(["op": "delete", "finger": finger])
-        fingerprintsMessage = r.ok ? "Deleted \(RK.label(finger).lowercased())." : "Delete failed: \(r.message)"
+    func delete(_ finger: String, _ confirmation: Confirmation) async {
+        if case .finger = confirmation {
+            fingerprintsMessage = "Touch one of your enrolled fingers to confirm…"
+        }
+        let r = await RKClient.call((["op": "delete", "finger": finger] as [String: Any]).merging(authFields(confirmation)) { $1 })
+        fingerprintsMessage = r.ok ? "Deleted \(RK.label(finger).lowercased())." : "Delete failed: \(explain(r))"
         await refresh()
     }
 
@@ -147,6 +204,8 @@ final class AppModel: ObservableObject {
             passwordMessage = "✓ Password checked and stored."
         } else if r.error == "bad-password" {
             passwordMessage = "✗ That is not your login password."
+        } else if r.error == "untrusted-client" {
+            passwordMessage = "✗ Only the installed RidgeKey app may do this - reinstall RidgeKey."
         } else {
             passwordMessage = "✗ \(r.message)"
         }
