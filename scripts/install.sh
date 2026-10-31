@@ -84,7 +84,9 @@ mkdir -p "$DEST/etc"
 TC_TMP="$(mktemp "$DEST/etc/.trusted-clients.XXXXXX")"
 for c in "$DEST/bin/ridgekeyctl" /Applications/RidgeKey.app; do
   [ -e "$c" ] || continue
-  req="$(codesign -d -r- "$c" 2>&1 | sed -n 's/^designated => //p')"
+  # Ad-hoc signatures have no embedded requirement; codesign then prints the implicit one as a
+  # comment ("# designated => cdhash H\"...\"") - accept both forms.
+  req="$(codesign -d -r- "$c" 2>&1 | sed -n 's/^#* *designated => //p' | head -1)"
   if [ -n "$req" ]; then
     printf '%s\t%s\n' "$c" "$req" >> "$TC_TMP"
     echo "    $c"
