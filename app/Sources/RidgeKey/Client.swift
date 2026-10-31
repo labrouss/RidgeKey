@@ -1,7 +1,7 @@
 // RidgeKey - XPC client for ridgekeyd (mirror of src/common/ridgekey-protocol.h).
 // SPDX-License-Identifier: MIT
 import Foundation
-import XPC
+@preconcurrency import XPC   // XPC objects predate Sendable; they are thread-safe
 
 enum RK {
     static let service = "io.github.labrouss.ridgekey"

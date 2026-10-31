@@ -23,7 +23,7 @@ Fingerprint authentication for Hackintosh laptops with **match-in-sensor** reade
 | 4a | `sudo` with fingerprint: `pam_ridgekey.so` + `ridgekey-sudo` ([docs](docs/ridgekeyd.md#fingerprint-for-sudo)) | ✅ 0.2.0 tested: match, wrong finger, Ctrl-C |
 | 4c | Stored password: checked, then kept in the System keychain (root only); lock-state tracking | ✅ 0.3.0 tested |
 | 4b | Lock screen: `ridgekey-agent` types the stored password into Apple's own lock screen after a match ([docs](docs/ridgekeyd.md#lock-screen-unlock)) | ✅ 0.4.3 tested: display on and asleep |
-| 4d | **RidgeKey.app** (SwiftUI): status, enroll/delete with progress, lock-screen password, sudo toggle | 🔧 0.6.0 first version |
+| 4d | **RidgeKey.app** (SwiftUI): status, enroll/delete with progress, lock-screen password, sudo toggle | ✅ 0.6.0 tested on the 840 G8 |
 | 4f | Authorization plugin for admin password dialogs | planned |
 | 4e | Stable local code signature, so Accessibility survives upgrades (`ridgekey-sign`) | 🔧 0.5.0: signing confirmed on the 840 G8; upgrade test pending |
 
