@@ -211,7 +211,9 @@ this feature).
 ## Finger actions
 
 ```sh
-ridgekeyctl action add left-index tap lock                          # tap = lock the screen
+ridgekeyctl action add left-index tap lock                          # single tap = lock the screen
+ridgekeyctl action add left-index double shortcut "Focus"           # double tap
+ridgekeyctl action add left-index triple shortcut "Meeting mode"    # triple tap
 ridgekeyctl action add right-thumb hold 2 shortcut "Work mode"      # hold 2 s = run a Shortcut
 ridgekeyctl actions                                                 # list
 ridgekeyctl action remove right-thumb [tap|hold]     ridgekeyctl action clear
@@ -224,6 +226,10 @@ Or in the app: **Finger Actions**.
 - **Tap / hold:** the time from "finger on" to "finger lifted". On the 840 G8's Synaptics reader
   the match arrives after the lift, so a hold is measured exactly and the action runs on release.
   The longest hold rule reached wins; otherwise the tap rule.
+- **Double / triple tap:** after the first (matched) tap, quick extra touches are counted from the
+  sensor's "finger on" signal - no second match needed - until no touch comes within 0.7 s.
+  RidgeKey only waits like that for fingers that have a double/triple rule, so single taps on
+  other fingers stay instant. Very fast taps may be missed if the sensor is still re-arming.
 - **Who acts:** ridgekeyd only matches your own enrolled fingers (Windows Hello / BIOS prints and
   other people's fingers do nothing) and tells RidgeKey Agent; the agent locks the screen
   (`SACLockScreenImmediate`, Ctrl-Cmd-Q as fallback) or runs `shortcuts run "<name>"` as you.

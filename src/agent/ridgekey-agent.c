@@ -572,7 +572,8 @@ handle_action (xpc_object_t ev)
 
   if (locked || !action)
     return;                       /* never act on the lock screen */
-  logf_ ("action: %s %s (%.1f s)", xpc_dictionary_get_string (ev, RK_KEY_GESTURE) ?: "?",
+  logf_ ("action: %s x%lld %s (%.1f s)", xpc_dictionary_get_string (ev, RK_KEY_GESTURE) ?: "?",
+         (long long) xpc_dictionary_get_int64 (ev, RK_KEY_TAPS),
          xpc_dictionary_get_string (ev, RK_KEY_FINGER) ?: "?", xpc_dictionary_get_double (ev, RK_KEY_HELD));
   if (strcmp (action, "lock") == 0)
     lock_screen_now ();

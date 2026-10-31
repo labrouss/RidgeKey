@@ -86,6 +86,7 @@
 #define RK_KEY_ACTIONS         "actions"  /* actions-get/-set: array of rule dictionaries */
 #define RK_KEY_GESTURE         "gesture"  /* rule: "tap" | "hold" */
 #define RK_KEY_SECONDS         "seconds"  /* rule: hold time */
+#define RK_KEY_TAPS            "taps"     /* rule / action event: 1 single, 2 double, 3 triple tap */
 #define RK_KEY_ACTION          "action"   /* rule / action event: "lock" | "shortcut" */
 #define RK_KEY_SHORTCUT        "shortcut" /* rule / action event: Shortcuts app name */
 #define RK_KEY_HELD            "held"     /* action event: seconds the finger was held */

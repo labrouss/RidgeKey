@@ -86,6 +86,15 @@ expect_out 'Work mode' "shortcut name kept"
 expect_rc 0 "replacing the same finger + gesture" ridgekeyctl action add left-index tap shortcut "Focus"
 expect_rc 0 "list again" ridgekeyctl actions
 expect_out "2 finger actions" "replaced, not added"
+expect_rc 0 "add: double tap left-index -> Shortcut" ridgekeyctl action add left-index double shortcut "Two"
+expect_rc 0 "add: triple tap left-index -> lock" ridgekeyctl action add left-index triple lock
+expect_rc 0 "list with multi-tap" ridgekeyctl actions
+expect_out "4 finger actions" "single, double and triple tap are separate rules"
+expect_out "double" "double tap listed"
+expect_out "triple" "triple tap listed"
+expect_rc 0 "remove only the triple tap" ridgekeyctl action remove left-index triple
+expect_rc 0 "list" ridgekeyctl actions
+expect_out "3 finger actions" "only the triple tap removed"
 expect_rc 1 "hold 0 s refused" ridgekeyctl action add left-index hold 0 lock
 expect_out "bad-request" "validation"
 expect_rc 1 "shortcut without a name refused" ridgekeyctl action add left-index tap shortcut

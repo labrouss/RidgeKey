@@ -50,6 +50,11 @@ rk_rule_validate (const RkRule *r, GError **error)
       g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "unknown finger");
       return FALSE;
     }
+  if (!r->hold && (r->taps < 1 || r->taps > RK_TAPS_MAX))
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "taps must be 1-%d", RK_TAPS_MAX);
+      return FALSE;
+    }
   if (r->hold && (r->seconds < RK_HOLD_MIN_SECONDS || r->seconds > RK_HOLD_MAX_SECONDS))
     {
       g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
@@ -102,6 +107,7 @@ actions_load (uid_t uid)
       r->finger = (FpFinger) rk_finger_from_name (finger);
       r->hold = gesture && strcmp (gesture, "hold") == 0;
       r->seconds = (guint) g_key_file_get_integer (kf, groups[i], "seconds", NULL);
+      r->taps = r->hold ? 1 : (guint) MAX (1, g_key_file_get_integer (kf, groups[i], "taps", NULL));
       r->action = g_key_file_get_string (kf, groups[i], "action", NULL);
       r->shortcut = g_key_file_get_string (kf, groups[i], "shortcut", NULL);
       if (rk_rule_validate (r, NULL))
@@ -147,6 +153,8 @@ actions_save (uid_t uid, GPtrArray *rules, GError **error)
       g_key_file_set_string (kf, g, "gesture", r->hold ? "hold" : "tap");
       if (r->hold)
         g_key_file_set_integer (kf, g, "seconds", (gint) r->seconds);
+      else
+        g_key_file_set_integer (kf, g, "taps", (gint) r->taps);
       g_key_file_set_string (kf, g, "action", r->action);
       if (r->shortcut && *r->shortcut)
         g_key_file_set_string (kf, g, "shortcut", r->shortcut);
@@ -158,7 +166,7 @@ actions_save (uid_t uid, GPtrArray *rules, GError **error)
 }
 
 const RkRule *
-actions_pick (GPtrArray *rules, FpFinger finger, double held)
+actions_pick (GPtrArray *rules, FpFinger finger, double held, guint taps)
 {
   const RkRule *best_hold = NULL, *tap = NULL;
   guint i;
@@ -174,8 +182,38 @@ actions_pick (GPtrArray *rules, FpFinger finger, double held)
           if (held >= (double) r->seconds && (!best_hold || r->seconds > best_hold->seconds))
             best_hold = r;
         }
-      else if (!tap)
+      else if (!tap && r->taps == taps)
         tap = r;
     }
   return best_hold ? best_hold : tap;
+}
+
+guint
+actions_max_taps (GPtrArray *rules, FpFinger finger)
+{
+  guint i, max = 1;
+
+  for (i = 0; i < rules->len; i++)
+    {
+      const RkRule *r = g_ptr_array_index (rules, i);
+
+      if (r->finger == finger && !r->hold && r->taps > max)
+        max = r->taps;
+    }
+  return max;
+}
+
+gboolean
+actions_is_hold (GPtrArray *rules, FpFinger finger, double held)
+{
+  guint i;
+
+  for (i = 0; i < rules->len; i++)
+    {
+      const RkRule *r = g_ptr_array_index (rules, i);
+
+      if (r->finger == finger && r->hold && held >= (double) r->seconds)
+        return TRUE;
+    }
+  return FALSE;
 }

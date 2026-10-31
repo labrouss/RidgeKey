@@ -154,6 +154,10 @@ typedef struct {
   GPtrArray    *rules;          /* listen: the console user's finger actions */
   gint64        present_since;  /* finger-status timing (monotonic us), for hold gestures */
   gint64        lifted_at;
+  gboolean      finger_on;      /* last finger-status, for tap edges */
+  guint         taps;           /* listen: > 0 while counting a double/triple tap */
+  FpFinger      tap_finger;
+  guint         tap_timer;
 
   GError       *error;          /* final error, if any */
   const char   *err_code;       /* overrides the code derived from error */
@@ -179,6 +183,7 @@ send_event (Op *op, xpc_object_t ev)
 static void listen_schedule (guint delay_ms);
 static void run_on_main (GSourceFunc fn, gpointer data);
 static void on_listen_identified (GObject *src, GAsyncResult *res, gpointer data);
+static void tap_arm (Op *op);
 static GQueue deferred = G_QUEUE_INIT;   /* requests that arrived while listening */
 static guint  listen_failures;           /* consecutive listener errors -> back off */
 static gboolean handle_request (gpointer data);
@@ -222,6 +227,8 @@ op_free (Op *op)
   g_free (op->right);
   g_free (op->client);
   g_clear_pointer (&op->rules, g_ptr_array_unref);
+  if (op->tap_timer)
+    g_source_remove (op->tap_timer);
   g_free (op->username);
   request_free (op->req);
   g_free (op);
@@ -341,6 +348,24 @@ on_finger_status (GObject *obj, GParamSpec *pspec, gpointer data)
     }
   else if (op->present_since && !op->lifted_at)
     op->lifted_at = g_get_monotonic_time ();
+
+  if (op->kind == OP_LISTEN && op->taps > 0)
+    {
+      gboolean on = (st & FP_FINGER_STATUS_PRESENT) != 0;
+
+      if (on && !op->finger_on)
+        {
+          op->taps++;                         /* another quick touch: no match needed */
+          if (op->tap_timer)
+            {
+              g_source_remove (op->tap_timer);
+              op->tap_timer = 0;
+            }
+        }
+      else if (!on && op->finger_on)
+        tap_arm (op);                         /* lifted: wait briefly for the next tap */
+    }
+  op->finger_on = (st & FP_FINGER_STATUS_PRESENT) != 0;
 
   xpc_dictionary_set_string (ev, RK_KEY_EVENT, RK_EV_FINGER);
   xpc_dictionary_set_bool (ev, RK_KEY_PRESENT, (st & FP_FINGER_STATUS_PRESENT) != 0);
@@ -1176,9 +1201,49 @@ send_action (Op *op, const RkRule *rule, double held, FpFinger finger)
     xpc_dictionary_set_string (ev, RK_KEY_SHORTCUT, rule->shortcut);
   xpc_dictionary_set_string (ev, RK_KEY_FINGER, rk_finger_name (finger));
   xpc_dictionary_set_string (ev, RK_KEY_GESTURE, rule->hold ? "hold" : "tap");
+  xpc_dictionary_set_int64 (ev, RK_KEY_TAPS, rule->hold ? 1 : rule->taps);
   xpc_dictionary_set_double (ev, RK_KEY_HELD, held);
   xpc_connection_send_message (agent_conn, ev);
   xpc_release (ev);
+}
+
+static void
+listen_identify_again (Op *op)
+{
+  op->present_since = op->lifted_at = 0;
+  fp_device_identify (op->dev, op->gallery, op->cancel, NULL, NULL, NULL, on_listen_identified, op);
+}
+
+/* The tap window closed (or the highest tap count was reached): act, then end this round. */
+static gboolean
+tap_fire (gpointer data)
+{
+  Op *op = data;
+  const RkRule *rule = actions_pick (op->rules, op->tap_finger, 0.0, op->taps);
+
+  op->tap_timer = 0;
+  if (rule)
+    {
+      g_message ("action: %u x tap %s -> %s%s%s", op->taps, rk_finger_name (op->tap_finger), rule->action,
+                 rule->shortcut ? " " : "", rule->shortcut ? rule->shortcut : "");
+      send_action (op, rule, 0.0, op->tap_finger);
+    }
+  else
+    g_message ("action: %u x tap %s - no rule", op->taps, rk_finger_name (op->tap_finger));
+  op->taps = 0;
+  g_cancellable_cancel (op->cancel);          /* ends the waiting identify; listening restarts */
+  return G_SOURCE_REMOVE;
+}
+
+static void
+tap_arm (Op *op)
+{
+  if (op->tap_timer)
+    g_source_remove (op->tap_timer);
+  if (op->taps >= actions_max_taps (op->rules, op->tap_finger))
+    op->tap_timer = g_idle_add (tap_fire, op);                /* nothing more to wait for */
+  else
+    op->tap_timer = g_timeout_add (RK_TAP_WINDOW_MS, tap_fire, op);
 }
 
 static void
@@ -1188,14 +1253,29 @@ on_listen_identified (GObject *src, GAsyncResult *res, gpointer data)
   GError *err = NULL;
   g_autoptr(FpPrint) match = NULL;
   g_autoptr(FpPrint) scanned = NULL;
+  gboolean ok = fp_device_identify_finish (FP_DEVICE (src), res, &match, &scanned, &err);
 
-  if (!fp_device_identify_finish (FP_DEVICE (src), res, &match, &scanned, &err))
+  /* Counting taps: the extra touches need no match, only "finger on" edges (on_finger_status).
+   * Keep a capture running so the sensor keeps reporting them. */
+  if (op->taps > 0)
+    {
+      if (!ok && (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED) ||
+                  (err->domain != FP_DEVICE_RETRY)))
+        {
+          op_finish (op, err);
+          return;
+        }
+      g_clear_error (&err);
+      listen_identify_again (op);
+      return;
+    }
+
+  if (!ok)
     {
       if (err->domain == FP_DEVICE_RETRY && !g_cancellable_is_cancelled (op->cancel))
         {
           g_error_free (err);           /* a smudge: just keep listening */
-          op->present_since = op->lifted_at = 0;
-          fp_device_identify (op->dev, op->gallery, op->cancel, NULL, NULL, NULL, on_listen_identified, op);
+          listen_identify_again (op);
           return;
         }
       if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_CANCELLED))
@@ -1209,8 +1289,19 @@ on_listen_identified (GObject *src, GAsyncResult *res, gpointer data)
       FpFinger finger = fp_print_get_finger (match);
       gint64 end = op->lifted_at ? op->lifted_at : g_get_monotonic_time ();
       double held = op->present_since ? (end - op->present_since) / (double) G_USEC_PER_SEC : 0.0;
-      const RkRule *rule = actions_pick (op->rules, finger, held);
+      const RkRule *rule;
 
+      /* a short touch on a finger with double/triple rules: count the next quick taps first */
+      if (!actions_is_hold (op->rules, finger, held) && actions_max_taps (op->rules, finger) > 1)
+        {
+          op->taps = 1;
+          op->tap_finger = finger;
+          if (!op->finger_on)
+            tap_arm (op);                     /* already lifted (Synaptics: match after lift) */
+          listen_identify_again (op);
+          return;
+        }
+      rule = actions_pick (op->rules, finger, held, 1);
       if (rule)
         {
           g_message ("action: %s %s (%.1f s) -> %s%s%s", rule->hold ? "hold" : "tap",
@@ -1479,6 +1570,7 @@ do_actions_get (Request *r)
       xpc_dictionary_set_string (d, RK_KEY_FINGER, rk_finger_name (rule->finger));
       xpc_dictionary_set_string (d, RK_KEY_GESTURE, rule->hold ? "hold" : "tap");
       xpc_dictionary_set_int64 (d, RK_KEY_SECONDS, rule->hold ? rule->seconds : 0);
+      xpc_dictionary_set_int64 (d, RK_KEY_TAPS, rule->hold ? 1 : rule->taps);
       xpc_dictionary_set_string (d, RK_KEY_ACTION, rule->action);
       xpc_dictionary_set_string (d, RK_KEY_SHORTCUT, rule->shortcut ? rule->shortcut : "");
       xpc_array_append_value (arr, d);
@@ -1529,6 +1621,7 @@ do_actions_set (Request *r)
           rule->finger = (FpFinger) rk_finger_from_name (xpc_dictionary_get_string (d, RK_KEY_FINGER));
           rule->hold = gesture && strcmp (gesture, "hold") == 0;
           rule->seconds = (guint) xpc_dictionary_get_int64 (d, RK_KEY_SECONDS);
+          rule->taps = rule->hold ? 1 : (guint) MAX (1, xpc_dictionary_get_int64 (d, RK_KEY_TAPS));
           rule->action = g_strdup (xpc_dictionary_get_string (d, RK_KEY_ACTION));
           if (xpc_dictionary_get_string (d, RK_KEY_SHORTCUT) && *xpc_dictionary_get_string (d, RK_KEY_SHORTCUT))
             rule->shortcut = g_strdup (xpc_dictionary_get_string (d, RK_KEY_SHORTCUT));

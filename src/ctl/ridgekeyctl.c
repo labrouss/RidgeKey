@@ -48,11 +48,11 @@ usage (FILE *f)
     "  password check          is a password stored, and is it still your login password?\n"
     "                          (password set --stdin reads it from standard input, for scripts)\n"
     "  actions                 your finger actions\n"
-    "  action add FINGER tap lock|shortcut [NAME]\n"
+    "  action add FINGER tap|double|triple lock|shortcut [NAME]\n"
     "  action add FINGER hold SECONDS lock|shortcut [NAME]\n"
     "                          e.g. action add left-index tap lock\n"
     "                               action add right-thumb hold 2 shortcut \"Work mode\"\n"
-    "  action remove FINGER [tap|hold]   action clear\n"
+    "  action remove FINGER [tap|double|triple|hold]   action clear\n"
     "  authorize [RIGHT]       test the admin-dialog path: on-screen prompt + an admin's finger\n"
     "                          (root only; the password is never printed)\n"
     "\n"
@@ -241,7 +241,10 @@ print_rule (xpc_object_t d)
   const char *a = xpc_dictionary_get_string (d, RK_KEY_ACTION);
   const char *sc = xpc_dictionary_get_string (d, RK_KEY_SHORTCUT);
 
-  printf ("  %-13s %-4s", xpc_dictionary_get_string (d, RK_KEY_FINGER), g);
+  long long taps = xpc_dictionary_get_int64 (d, RK_KEY_TAPS);
+  const char *label = g && strcmp (g, "hold") == 0 ? "hold" : taps == 3 ? "triple" : taps == 2 ? "double" : "tap";
+
+  printf ("  %-13s %-6s", xpc_dictionary_get_string (d, RK_KEY_FINGER), label);
   if (g && strcmp (g, "hold") == 0)
     printf (" %llds", (long long) xpc_dictionary_get_int64 (d, RK_KEY_SECONDS));
   else
@@ -281,13 +284,18 @@ actions_cmd (const char *user, int argc, char **argv)
     {
       const char *finger = argc > 1 ? argv[1] : NULL, *gesture = argc > 2 ? argv[2] : NULL;
       int ai = 3;
-      long secs = 0;
+      long secs = 0, taps = 1;
       xpc_object_t d;
 
+      if (gesture && (strcmp (gesture, "double") == 0 || strcmp (gesture, "triple") == 0))
+        {
+          taps = strcmp (gesture, "double") == 0 ? 2 : 3;
+          gesture = "tap";
+        }
       if (!rk_finger_from_name (finger) || !gesture ||
           (strcmp (gesture, "tap") != 0 && strcmp (gesture, "hold") != 0))
         {
-          fprintf (stderr, "usage: ridgekeyctl action add FINGER tap|hold [SECONDS] lock|shortcut [NAME]\n");
+          fprintf (stderr, "usage: ridgekeyctl action add FINGER tap|double|triple|hold [SECONDS] lock|shortcut [NAME]\n");
           return 2;
         }
       if (strcmp (gesture, "hold") == 0)
@@ -306,7 +314,8 @@ actions_cmd (const char *user, int argc, char **argv)
           xpc_object_t e = xpc_array_get_value (rules, i);
 
           if (strcmp (xpc_dictionary_get_string (e, RK_KEY_FINGER), finger) == 0 &&
-              strcmp (xpc_dictionary_get_string (e, RK_KEY_GESTURE), gesture) == 0)
+              strcmp (xpc_dictionary_get_string (e, RK_KEY_GESTURE), gesture) == 0 &&
+              (strcmp (gesture, "hold") == 0 || xpc_dictionary_get_int64 (e, RK_KEY_TAPS) == taps))
             continue;
           xpc_array_append_value (out, e);
         }
@@ -314,6 +323,7 @@ actions_cmd (const char *user, int argc, char **argv)
       xpc_dictionary_set_string (d, RK_KEY_FINGER, finger);
       xpc_dictionary_set_string (d, RK_KEY_GESTURE, gesture);
       xpc_dictionary_set_int64 (d, RK_KEY_SECONDS, secs);
+      xpc_dictionary_set_int64 (d, RK_KEY_TAPS, taps);
       xpc_dictionary_set_string (d, RK_KEY_ACTION, argv[ai]);
       if (argc > ai + 1)
         xpc_dictionary_set_string (d, RK_KEY_SHORTCUT, argv[ai + 1]);
@@ -326,8 +336,12 @@ actions_cmd (const char *user, int argc, char **argv)
         {
           xpc_object_t e = xpc_array_get_value (rules, i);
 
+          const char *eg = xpc_dictionary_get_string (e, RK_KEY_GESTURE);
+          long long et = xpc_dictionary_get_int64 (e, RK_KEY_TAPS);
+          const char *el = strcmp (eg, "hold") == 0 ? "hold" : et == 3 ? "triple" : et == 2 ? "double" : "tap";
+
           if (strcmp (xpc_dictionary_get_string (e, RK_KEY_FINGER), argv[1]) == 0 &&
-              (argc < 3 || strcmp (xpc_dictionary_get_string (e, RK_KEY_GESTURE), argv[2]) == 0))
+              (argc < 3 || strcmp (el, argv[2]) == 0))
             continue;
           xpc_array_append_value (out, e);
         }

@@ -364,11 +364,13 @@ struct ActionsView: View {
                                 ForEach(model.fingers, id: \.self) { Text(RK.label($0)).tag($0) }
                             }
                             .labelsHidden().frame(width: 150)
-                            Picker("", selection: $a.hold) {
-                                Text("tap").tag(false)
-                                Text("hold").tag(true)
+                            Picker("", selection: $a.gesture) {
+                                Text("single tap").tag("1")
+                                Text("double tap").tag("2")
+                                Text("triple tap").tag("3")
+                                Text("hold").tag("hold")
                             }
-                            .labelsHidden().pickerStyle(.segmented).frame(width: 110)
+                            .labelsHidden().frame(width: 120)
                             if a.hold {
                                 Stepper("\(a.seconds) s", value: $a.seconds, in: 1...10).frame(width: 90)
                             }
@@ -412,7 +414,9 @@ struct ActionsView: View {
             }
             Section("How it works") {
                 Text("While your screen is unlocked and the sensor is idle, RidgeKey waits for one of "
-                     + "your enrolled fingers: a tap, or a hold of N seconds (released). The sensor waits "
+                     + "your enrolled fingers: a single, double or triple tap, or a hold of N seconds "
+                     + "(released). Double/triple taps wait ~0.7 s for the next tap, only on fingers that "
+                     + "have such a rule. The sensor waits "
                      + "in hardware, so nothing polls. sudo, the lock screen and admin dialogs always come "
                      + "first. Shortcuts are the ones you build in the Shortcuts app; RidgeKey Agent runs them as you.")
                     .font(.footnote).foregroundStyle(.secondary)

@@ -30,12 +30,19 @@ final class AppModel: ObservableObject {
         var finger: String
         var hold: Bool
         var seconds: Int
+        var taps: Int = 1            // tap only: 1 single, 2 double, 3 triple
+        /// "1", "2", "3" = taps; "hold" = hold (one picker in the UI)
+        var gesture: String {
+            get { hold ? "hold" : String(taps) }
+            set { if newValue == "hold" { hold = true } else { hold = false; taps = Int(newValue) ?? 1 } }
+        }
         var action: String          // "lock" | "shortcut"
         var shortcut: String
 
         /// Same rule = same content (ids are only for SwiftUI lists).
         static func == (a: FingerAction, b: FingerAction) -> Bool {
             a.finger == b.finger && a.hold == b.hold && (!a.hold || a.seconds == b.seconds)
+                && (a.hold || a.taps == b.taps)
                 && a.action == b.action && (a.action != "shortcut" || a.shortcut == b.shortcut)
         }
     }
@@ -153,6 +160,7 @@ final class AppModel: ObservableObject {
                 guard let d = item as? [String: Any], let f = d["finger"] as? String else { return nil }
                 return FingerAction(finger: f, hold: (d["gesture"] as? String) == "hold",
                                     seconds: max(d["seconds"] as? Int ?? 2, 1),
+                                    taps: max(d["taps"] as? Int ?? 1, 1),
                                     action: d["action"] as? String ?? "lock",
                                     shortcut: d["shortcut"] as? String ?? "")
             }
@@ -251,6 +259,7 @@ final class AppModel: ObservableObject {
     func saveActions(_ list: [FingerAction]) async {
         let rules: [Any] = list.map { a in
             ["finger": a.finger, "gesture": a.hold ? "hold" : "tap", "seconds": a.hold ? a.seconds : 0,
+             "taps": a.hold ? 1 : a.taps,
              "action": a.action, "shortcut": a.action == "shortcut" ? a.shortcut : ""] as [String: Any]
         }
         let r = await RKClient.call(["op": "actions-set", "actions": rules])

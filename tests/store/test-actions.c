@@ -8,7 +8,7 @@ static RkRule *
 rule (FpFinger f, gboolean hold, guint secs, const char *action, const char *sc)
 {
   RkRule *r = g_new0 (RkRule, 1);
-  r->finger = f; r->hold = hold; r->seconds = secs;
+  r->finger = f; r->hold = hold; r->seconds = secs; r->taps = 1;
   r->action = g_strdup (action); r->shortcut = g_strdup (sc);
   return r;
 }
@@ -27,6 +27,8 @@ test_validate (void)
   r = rule (FP_FINGER_LEFT_INDEX, FALSE, 0, "shortcut", "bad\nname"); g_assert_false (rk_rule_validate (r, NULL)); rk_rule_free (r);
   r = rule (FP_FINGER_LEFT_INDEX, FALSE, 0, "rm -rf", NULL); g_assert_false (rk_rule_validate (r, NULL)); rk_rule_free (r);
   r = rule (FP_FINGER_UNKNOWN, FALSE, 0, "lock", NULL);      g_assert_false (rk_rule_validate (r, NULL)); rk_rule_free (r);
+  r = rule (FP_FINGER_LEFT_INDEX, FALSE, 0, "lock", NULL); r->taps = 3; g_assert_true (rk_rule_validate (r, NULL)); rk_rule_free (r);
+  r = rule (FP_FINGER_LEFT_INDEX, FALSE, 0, "lock", NULL); r->taps = 4; g_assert_false (rk_rule_validate (r, NULL)); rk_rule_free (r);
 }
 
 static void
@@ -40,12 +42,25 @@ test_pick (void)
   g_ptr_array_add (rules, rule (FP_FINGER_RIGHT_THUMB, TRUE, 5, "shortcut", "five"));
   g_ptr_array_add (rules, rule (FP_FINGER_LEFT_INDEX, TRUE, 3, "lock", NULL));
 
-  p = actions_pick (rules, FP_FINGER_RIGHT_THUMB, 0.4);  g_assert_nonnull (p); g_assert_false (p->hold);
-  p = actions_pick (rules, FP_FINGER_RIGHT_THUMB, 2.3);  g_assert_cmpstr (p->shortcut, ==, "two");
-  p = actions_pick (rules, FP_FINGER_RIGHT_THUMB, 7.0);  g_assert_cmpstr (p->shortcut, ==, "five");
-  p = actions_pick (rules, FP_FINGER_LEFT_INDEX, 1.0);   g_assert_null (p);          /* hold only, too short */
-  p = actions_pick (rules, FP_FINGER_LEFT_INDEX, 3.0);   g_assert_nonnull (p);
-  p = actions_pick (rules, FP_FINGER_RIGHT_INDEX, 1.0);  g_assert_null (p);          /* no rule for it */
+  {
+    RkRule *dbl = rule (FP_FINGER_RIGHT_THUMB, FALSE, 0, "shortcut", "double");
+    dbl->taps = 2;
+    g_ptr_array_add (rules, dbl);
+  }
+
+  p = actions_pick (rules, FP_FINGER_RIGHT_THUMB, 0.4, 1);  g_assert_nonnull (p); g_assert_false (p->hold);
+  g_assert_cmpstr (p->action, ==, "lock");
+  p = actions_pick (rules, FP_FINGER_RIGHT_THUMB, 0.3, 2);  g_assert_cmpstr (p->shortcut, ==, "double");
+  p = actions_pick (rules, FP_FINGER_RIGHT_THUMB, 0.3, 3);  g_assert_null (p);       /* no triple rule */
+  p = actions_pick (rules, FP_FINGER_RIGHT_THUMB, 2.3, 1);  g_assert_cmpstr (p->shortcut, ==, "two");
+  p = actions_pick (rules, FP_FINGER_RIGHT_THUMB, 7.0, 1);  g_assert_cmpstr (p->shortcut, ==, "five");
+  p = actions_pick (rules, FP_FINGER_LEFT_INDEX, 1.0, 1);   g_assert_null (p);       /* hold only, too short */
+  p = actions_pick (rules, FP_FINGER_LEFT_INDEX, 3.0, 1);   g_assert_nonnull (p);
+  p = actions_pick (rules, FP_FINGER_RIGHT_INDEX, 1.0, 1);  g_assert_null (p);       /* no rule for it */
+  g_assert_cmpuint (actions_max_taps (rules, FP_FINGER_RIGHT_THUMB), ==, 2);
+  g_assert_cmpuint (actions_max_taps (rules, FP_FINGER_LEFT_INDEX), ==, 1);
+  g_assert_true (actions_is_hold (rules, FP_FINGER_RIGHT_THUMB, 2.0));
+  g_assert_false (actions_is_hold (rules, FP_FINGER_RIGHT_THUMB, 1.9));
 }
 
 static void
@@ -60,10 +75,12 @@ test_roundtrip (void)
   g_setenv ("RIDGEKEY_STORE_ROOT", root, TRUE);
   g_ptr_array_add (rules, rule (FP_FINGER_LEFT_INDEX, FALSE, 0, "lock", NULL));
   g_ptr_array_add (rules, rule (FP_FINGER_RIGHT_THUMB, TRUE, 2, "shortcut", "Work mode ✓"));
+  ((RkRule *) rules->pdata[0])->taps = 2;
   g_assert_true (actions_save (501, rules, NULL));
   back = actions_load (501);
   g_assert_cmpuint (back->len, ==, 2);
   g_assert_cmpint (((RkRule *) back->pdata[1])->seconds, ==, 2);
+  g_assert_cmpint (((RkRule *) back->pdata[0])->taps, ==, 2);
   g_assert_cmpstr (((RkRule *) back->pdata[1])->shortcut, ==, "Work mode ✓");
   {
     g_autofree char *path = g_build_filename (root, "actions", "501.conf", NULL);
