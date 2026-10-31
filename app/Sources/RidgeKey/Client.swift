@@ -5,7 +5,7 @@ import Foundation
 
 enum RK {
     static let service = "io.github.labrouss.ridgekey"
-    static let agentPath = "/usr/local/ridgekey/bin/ridgekey-agent"
+    static let agentPath = "/usr/local/ridgekey/RidgeKeyAgent.app"
     static let sudoTool = "/usr/local/ridgekey/bin/ridgekey-sudo"
     static let adminTool = "/usr/local/ridgekey/bin/ridgekey-admin"
     static let fingerprintRule = "io.github.labrouss.ridgekey.fingerprint"

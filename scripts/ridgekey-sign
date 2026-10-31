@@ -7,7 +7,7 @@
 # designated requirement (identifier + certificate), and the permission survives upgrades.
 #
 #   sudo ridgekey-sign sign [FILE]     create the certificate on first use, then sign FILE
-#                                      (default /usr/local/ridgekey/bin/ridgekey-agent)
+#                                      (default /usr/local/ridgekey/RidgeKeyAgent.app)
 #   sudo ridgekey-sign status
 #   sudo ridgekey-sign remove          delete the certificate and its keychain (uninstall --purge)
 #
@@ -23,7 +23,7 @@ KC="$DIR/signing.keychain-db"
 PWF="$DIR/signing.keychain.pw"
 CN="RidgeKey Local Code Signing"
 IDENT="io.github.labrouss.ridgekey.agent"
-TARGET="${2:-/usr/local/ridgekey/bin/ridgekey-agent}"
+TARGET="${2:-/usr/local/ridgekey/RidgeKeyAgent.app}"
 
 TMPD=""
 cleanup() { [ -n "$TMPD" ] && rm -rf "$TMPD"; return 0; }
@@ -121,7 +121,7 @@ try_codesign() {   # $1 = label, rest = extra codesign args
 
 do_sign() {
   local cert old_list
-  [ -f "$TARGET" ] || die "$TARGET not found"
+  [ -e "$TARGET" ] || die "$TARGET not found"
   if [ ! -f "$KC" ] || [ ! -f "$PWF" ] || ! kc_unlock || [ -z "$(cert_hash)" ]; then
     create_identity
   fi
@@ -176,7 +176,7 @@ do_status() {
   else
     echo "local certificate: none"
   fi
-  if [ -f "$TARGET" ]; then
+  if [ -e "$TARGET" ]; then
     echo "$(basename "$TARGET"):"
     codesign -dr - "$TARGET" 2>&1 | sed -n 's/^designated => /  requirement: /p'
     codesign -dv "$TARGET" 2>&1 | sed -n 's/^\(CodeDirectory.*flags=[^ ]*\).*/  \1/p'

@@ -43,7 +43,10 @@
 #define RK_SERVICE_NAME   "io.github.labrouss.ridgekey"
 
 /* The only program allowed to receive the stored password (op "unlock"). */
-#define RK_AGENT_PATH     "/usr/local/ridgekey/bin/ridgekey-agent"
+/* The agent is a background-only app bundle, so System Settings (Accessibility) shows it as
+ * "RidgeKey Agent" with the RidgeKey icon. */
+#define RK_AGENT_BUNDLE   "/usr/local/ridgekey/RidgeKeyAgent.app"
+#define RK_AGENT_PATH     RK_AGENT_BUNDLE "/Contents/MacOS/ridgekey-agent"
 
 /* verify / identify wait at most this long for a finger */
 #define RK_TIMEOUT_MAX_SECONDS 120

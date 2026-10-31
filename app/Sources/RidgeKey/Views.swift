@@ -1,5 +1,6 @@
 // RidgeKey - SwiftUI views.
 // SPDX-License-Identifier: MIT
+import AppKit
 import SwiftUI
 
 enum Pane: String, CaseIterable, Identifiable {
@@ -246,16 +247,16 @@ struct LockScreenView: View {
                 }
             }
             Section("Accessibility permission") {
-                Text("ridgekey-agent types your password into the lock screen after a fingerprint match. "
+                Text("RidgeKey Agent types your password into the lock screen after a fingerprint match. "
                      + "It needs Accessibility permission (only once - it keeps its signature across upgrades).")
                 HStack {
                     Button("Open Accessibility settings") { model.openAccessibilitySettings() }
-                    Button("Show ridgekey-agent in Finder") { model.revealAgent() }
+                    Button("Show RidgeKey Agent in Finder") { model.revealAgent() }
                 }
             }
             Section("How it works") {
                 Text("Your password is checked against your account and kept in the System keychain, "
-                     + "readable only by root. It is handed only to ridgekey-agent, only right after a "
+                     + "readable only by root. It is handed only to RidgeKey Agent, only right after a "
                      + "fingerprint match, and only while your screen is locked. Lock with Ctrl-Cmd-Q, "
                      + "then touch the sensor.")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -327,6 +328,17 @@ struct AboutView: View {
 
     var body: some View {
         Form {
+            if let logo = Self.logo {
+                Section {
+                    Image(nsImage: logo)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .accessibilityLabel("RidgeKey")
+                }
+                .listRowInsets(EdgeInsets())
+            }
             Section {
                 LabeledContent("RidgeKey app", value: appVersion)
                 LabeledContent("ridgekeyd", value: model.reachable ? model.version : "not running")
@@ -340,6 +352,9 @@ struct AboutView: View {
             }
         }
     }
+
+    private static let logo: NSImage? = Bundle.main.url(forResource: "RidgeKeyLogo", withExtension: "png")
+        .flatMap { NSImage(contentsOf: $0) }
 
     private var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"

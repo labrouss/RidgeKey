@@ -41,9 +41,11 @@ Add `-v` to see finger on/off events. Ctrl-C cancels. Exit code 3 = daemon not r
 ## Lock-screen unlock
 
 1. `ridgekeyctl password set`: store your login password (see below).
-2. **System Settings → Privacy & Security → Accessibility** → enable **ridgekey-agent**
-   (`/usr/local/ridgekey/bin/ridgekey-agent`). This is needed only once: `install.sh` signs the
-   agent with a local certificate, so later builds keep the permission (see below).
+2. **System Settings → Privacy & Security → Accessibility** → enable **RidgeKey Agent**
+   (`/usr/local/ridgekey/RidgeKeyAgent.app`, a background-only app with the RidgeKey icon; in the
+   "+" file dialog press Cmd-Shift-G and paste the path). This is needed only once: `install.sh`
+   signs the agent with a local certificate, so later builds keep the permission (see below).
+   Upgrading from 0.7.0 or older: remove the old **ridgekey-agent** entry with "−".
 3. Optional check: `/usr/local/ridgekey/bin/ridgekey-agent --type-test`, run from Terminal,
    types a sample (capitals, digits, symbols, an accented letter) into whatever app has focus,
    using the same code as the lock screen but without Return. Click into an empty TextEdit
@@ -64,7 +66,7 @@ Add `-v` to see finger on/off events. Ctrl-C cancels. Exit code 3 = daemon not r
 
 | Check | Done by |
 |---|---|
-| The caller is `/usr/local/ridgekey/bin/ridgekey-agent`, identified from the connection's audit token | `ridgekeyd` |
+| The caller is `/usr/local/ridgekey/RidgeKeyAgent.app`, identified from the connection's audit token | `ridgekeyd` |
 | Its code signature is valid and uses the hardened runtime (no DYLD injection or debugger attach) | `ridgekeyd` |
 | The agent and every folder above it are owned by root and not writable by others | `ridgekeyd` |
 | The caller is the console user, and macOS reports that user's screen locked (IORegistry) | `ridgekeyd` |

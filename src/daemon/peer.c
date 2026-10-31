@@ -93,7 +93,8 @@ peer_is_agent (xpc_connection_t conn, uid_t *euid, pid_t *pid, GError **error)
       fail (error, "cannot find the calling process's executable");
       goto out;
     }
-  if (strcmp (path, RK_AGENT_PATH) != 0)
+  /* For a bundle, Security reports the bundle's path; accept the executable path as well. */
+  if (strcmp (path, RK_AGENT_BUNDLE) != 0 && strcmp (path, RK_AGENT_PATH) != 0)
     {
       fail (error, "only the RidgeKey agent may unlock the screen");
       goto out;

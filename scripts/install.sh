@@ -44,6 +44,7 @@ echo "==> Installing to $DEST"
 rm -rf "$DEST.new"
 mkdir -p "$DEST.new"
 cp -R "$SRC/bin" "$SRC/lib" "$DEST.new/"
+[ -d "$SRC/RidgeKeyAgent.app" ] && cp -R "$SRC/RidgeKeyAgent.app" "$DEST.new/"
 [ -d "$SRC/licenses" ] && cp -R "$SRC/licenses" "$DEST.new/"
 cp "$SRC/BUILDINFO.txt" "$DEST.new/" 2>/dev/null || true
 install -m 755 "$SRC/ridgekey-sudo" "$DEST.new/bin/ridgekey-sudo"
@@ -54,9 +55,9 @@ chmod 444 "$DEST.new/lib/pam/pam_ridgekey.so"
 install -m 755 "$SRC/ridgekey-sign" "$DEST.new/bin/ridgekey-sign"
 # Stable local signature for the agent, so Accessibility survives upgrades (falls back to the
 # ad-hoc CI signature if anything goes wrong - the agent works either way).
-echo "==> Signing ridgekey-agent with the local certificate"
+echo "==> Signing RidgeKey Agent with the local certificate"
 RK_SIGN_STATUS=ok
-"$DEST.new/bin/ridgekey-sign" sign "$DEST.new/bin/ridgekey-agent" || {
+"$DEST.new/bin/ridgekey-sign" sign "$DEST.new/RidgeKeyAgent.app" || {
   RK_SIGN_STATUS=adhoc
   echo "    kept the ad-hoc signature (Accessibility must be granted again after upgrades)"; }
 xattr -dr com.apple.quarantine "$DEST.new" 2>/dev/null || true
@@ -144,7 +145,7 @@ if [ -x "$DEST/bin/ridgekey-admin" ] && ls "/Library/Application Support/RidgeKe
 fi
 
 if [ "$RK_SIGN_STATUS" = adhoc ]; then
-  echo "Note: ridgekey-agent kept its ad-hoc signature - re-grant Accessibility after upgrades."
+  echo "Note: RidgeKey Agent kept its ad-hoc signature - re-grant Accessibility after upgrades."
 fi
 cat <<EOF
 
@@ -155,10 +156,9 @@ Installed. Open the RidgeKey app (Applications), or use the command line (no sud
 Fingerprint for sudo (optional, password still works):  sudo ridgekey-sudo enable
 Fingerprint for admin dialogs (optional, same):        sudo ridgekey-admin enable
 Lock screen: 1) ridgekeyctl password set
-             2) System Settings -> Privacy & Security -> Accessibility -> enable ridgekey-agent
-                (it is in /usr/local/ridgekey/bin). With the local signature this is needed only
-                once; the first time after switching from 0.4.x, remove it with "-" and add it
-                again with "+".
+             2) System Settings -> Privacy & Security -> Accessibility -> enable "RidgeKey Agent"
+                (/usr/local/ridgekey/RidgeKeyAgent.app). Needed once; it survives upgrades.
+                Coming from 0.7.0 or older: remove the old "ridgekey-agent" entry with "-".
              3) lock the screen (Ctrl-Cmd-Q) and touch the sensor
 Log: /Library/Logs/RidgeKey/ridgekeyd.log      Uninstall: sudo ./uninstall.sh [--purge]
 EOF

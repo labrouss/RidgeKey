@@ -23,23 +23,23 @@ mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
 cp "$BIN" "$OUT/Contents/MacOS/RidgeKey"
 
 ICON_KEY=""
-# App icon from the logo: pad to a square, then the standard iconset sizes.
-if command -v sips >/dev/null && command -v iconutil >/dev/null && [ -f "$REPO/assets/ridgekey-logo.png" ]; then
+# App icon: assets/ridgekey-icon.png (1024x1024, the key emblem on Apple's icon grid) -> .icns.
+ICON_SRC="$REPO/assets/ridgekey-icon.png"
+if command -v sips >/dev/null && command -v iconutil >/dev/null && [ -f "$ICON_SRC" ]; then
   T="$(mktemp -d)"
-  if sips -s format png --padToHeightWidth 1024 1024 --padColor 0B1726 \
-        "$REPO/assets/ridgekey-logo.png" --out "$T/square.png" >/dev/null 2>&1; then
-    mkdir -p "$T/RidgeKey.iconset"
-    for s in 16 32 128 256 512; do
-      sips -z $s $s "$T/square.png" --out "$T/RidgeKey.iconset/icon_${s}x${s}.png" >/dev/null 2>&1
-      d=$((s * 2))
-      sips -z $d $d "$T/square.png" --out "$T/RidgeKey.iconset/icon_${s}x${s}@2x.png" >/dev/null 2>&1
-    done
-    if iconutil -c icns "$T/RidgeKey.iconset" -o "$OUT/Contents/Resources/RidgeKey.icns" 2>/dev/null; then
-      ICON_KEY="<key>CFBundleIconFile</key><string>RidgeKey</string>"
-    fi
+  mkdir -p "$T/RidgeKey.iconset"
+  for s in 16 32 128 256 512; do
+    sips -z $s $s "$ICON_SRC" --out "$T/RidgeKey.iconset/icon_${s}x${s}.png" >/dev/null 2>&1
+    d=$((s * 2))
+    sips -z $d $d "$ICON_SRC" --out "$T/RidgeKey.iconset/icon_${s}x${s}@2x.png" >/dev/null 2>&1
+  done
+  if iconutil -c icns "$T/RidgeKey.iconset" -o "$OUT/Contents/Resources/RidgeKey.icns" 2>/dev/null; then
+    ICON_KEY="<key>CFBundleIconFile</key><string>RidgeKey</string>"
   fi
   rm -rf "$T"
 fi
+# The full logo, shown at the top of the About screen.
+[ -f "$REPO/assets/ridgekey-logo.png" ] && cp "$REPO/assets/ridgekey-logo.png" "$OUT/Contents/Resources/RidgeKeyLogo.png"
 
 cat > "$OUT/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

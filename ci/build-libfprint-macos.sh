@@ -244,15 +244,9 @@ for ex in $EXAMPLES; do
 done
 relocate "$BUNDLE"
 
-# The agent receives the stored password: hardened runtime (no DYLD injection / debugger
-# attach), fixed identifier. ridgekeyd refuses agents without the runtime flag.
-codesign --force --sign - --options runtime --identifier io.github.labrouss.ridgekey.agent \
-  "$BUNDLE/bin/ridgekey-agent" >/dev/null 2>&1 || die "codesign failed for ridgekey-agent"
-codesign -dv "$BUNDLE/bin/ridgekey-agent" 2>&1 | grep -q 'flags=.*runtime' || die "ridgekey-agent lacks the hardened runtime"
 for d in $(otool -L "$BUNDLE/bin/ridgekey-agent" | tail -n +2 | awk '{print $1}'); do
   case "$d" in /usr/lib/*|/System/*) ;; *) die "ridgekey-agent links $d - must use system libraries only" ;; esac
 done
-echo "    ridgekey-agent: hardened runtime, system libraries only"
 
 # PAM module: loaded into sudo, so it must depend on system libraries only.
 mkdir -p "$BUNDLE/lib/pam"
@@ -298,6 +292,47 @@ echo "    RidgeKey.bundle: system libraries only, AuthorizationPluginCreate expo
 log "RidgeKey.app (SwiftUI)"
 run bash "$REPO/scripts/build-app.sh" "$BUNDLE/RidgeKey.app"
 "$BUNDLE/RidgeKey.app/Contents/MacOS/RidgeKey" --version || die "RidgeKey.app does not start"
+
+# Lock-screen agent as a background-only app bundle: System Settings -> Accessibility then shows
+# "RidgeKey Agent" with the RidgeKey icon instead of a bare executable. It receives the stored
+# password, so: hardened runtime, fixed identifier (ridgekeyd checks both), system libs only.
+log "RidgeKeyAgent.app"
+AA="$BUNDLE/RidgeKeyAgent.app"
+mkdir -p "$AA/Contents/MacOS" "$AA/Contents/Resources"
+mv "$BUNDLE/bin/ridgekey-agent" "$AA/Contents/MacOS/ridgekey-agent"
+ln -s ../RidgeKeyAgent.app/Contents/MacOS/ridgekey-agent "$BUNDLE/bin/ridgekey-agent"   # CLI: --version, --type-test
+AGENT_ICON_KEY=""
+if [ -f "$BUNDLE/RidgeKey.app/Contents/Resources/RidgeKey.icns" ]; then
+  cp "$BUNDLE/RidgeKey.app/Contents/Resources/RidgeKey.icns" "$AA/Contents/Resources/"
+  AGENT_ICON_KEY="<key>CFBundleIconFile</key><string>RidgeKey</string>"
+fi
+cat > "$AA/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleExecutable</key><string>ridgekey-agent</string>
+  <key>CFBundleIdentifier</key><string>io.github.labrouss.ridgekey.agent</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>RidgeKey Agent</string>
+  <key>CFBundleDisplayName</key><string>RidgeKey Agent</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$RK_VER</string>
+  <key>CFBundleVersion</key><string>$RK_VER</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSBackgroundOnly</key><true/>
+  $AGENT_ICON_KEY
+</dict>
+</plist>
+PLIST
+plutil -lint "$AA/Contents/Info.plist" >/dev/null || die "RidgeKeyAgent.app Info.plist is invalid"
+codesign --force --sign - --options runtime --identifier io.github.labrouss.ridgekey.agent "$AA" >/dev/null 2>&1 \
+  || die "codesign failed for RidgeKeyAgent.app"
+codesign --verify --strict "$AA" || die "RidgeKeyAgent.app signature does not verify"
+codesign -dv "$AA" 2>&1 | grep -q 'flags=.*runtime' || die "RidgeKeyAgent.app lacks the hardened runtime"
+"$BUNDLE/bin/ridgekey-agent" --version || die "ridgekey-agent does not start from the bundle"
+echo "    RidgeKeyAgent.app: hardened runtime, system libraries only, icon: ${AGENT_ICON_KEY:+yes}"
 
 cp "$PATCHES"/*.patch "$BUNDLE/patches/"
 license_copy "$WORK/libfprint" libfprint

@@ -61,8 +61,10 @@ expect_rc 0 "app installed and starts (--version)" /Applications/RidgeKey.app/Co
 expect_out "RidgeKey" "app reports its version"
 
 echo "== lock-screen agent"
-AG=/usr/local/ridgekey/bin/ridgekey-agent
-expect_rc 0 "agent runs" "$AG" --version
+AG=/usr/local/ridgekey/RidgeKeyAgent.app
+[ -f "$AG/Contents/Resources/RidgeKey.icns" ] && pass "agent bundle has the RidgeKey icon" || fail "agent bundle has no icon"
+expect_rc 0 "agent bundle signature verifies (strict)" codesign --verify --strict "$AG"
+expect_rc 0 "agent runs" /usr/local/ridgekey/bin/ridgekey-agent --version
 expect_rc 0 "agent signature" codesign -dv "$AG"
 expect_out "runtime" "agent has the hardened runtime"
 expect_rc 0 "agent designated requirement" codesign -dr - "$AG"

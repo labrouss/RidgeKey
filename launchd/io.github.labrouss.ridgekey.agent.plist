@@ -8,7 +8,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/ridgekey/bin/ridgekey-agent</string>
+    <string>/usr/local/ridgekey/RidgeKeyAgent.app/Contents/MacOS/ridgekey-agent</string>
   </array>
 
   <key>LimitLoadToSessionType</key>
