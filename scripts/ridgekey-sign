@@ -48,6 +48,7 @@ create_identity() {
 
   local host
   host="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
+  host="${host//[^A-Za-z0-9._-]/}"     # plain characters only in the certificate
   write_cnf() {   # $1 = full | minimal
     {
       echo "[req]"
@@ -55,7 +56,8 @@ create_identity() {
       echo "prompt = no"
       echo "x509_extensions = ext"
       echo "[dn]"
-      echo "CN = $CN - $host"
+      echo "CN = $CN"                 # X.509 limits CN to 64 characters - keep it fixed
+      echo "OU = ${host:0:60}"        # which Mac created it (truncated to fit)
       echo "[ext]"
       if [ "$1" = full ]; then
         echo "basicConstraints = critical,CA:FALSE"
