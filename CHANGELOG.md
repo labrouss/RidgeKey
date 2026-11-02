@@ -2,6 +2,9 @@
 
 All releases tested on the HP EliteBook 840 G8 (Synaptics 06cb:00f0, macOS Tahoe).
 
+## Unreleased
+- Readers: Synaptics **06cb:00bd** reported working by a user.
+
 ## 1.0.0 - First production release
 - Everything from 0.1 – 0.10, tested together on the 840 G8: lock screen, admin dialogs, sudo,
   finger actions and the RidgeKey app.

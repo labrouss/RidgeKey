@@ -64,7 +64,7 @@ Upgrades keep your fingers and settings. Terminal install, uninstall and details
 
 | Driver | Vendor (USB id) | Status |
 |---|---|---|
-| `synaptics` | Synaptics (06cb) | ✅ tested: 06cb:00f0 in the HP EliteBook 840 G8, macOS Tahoe |
+| `synaptics` | Synaptics (06cb) | ✅ tested: **06cb:00f0** (HP EliteBook 840 G8, macOS Tahoe) · ✅ **06cb:00bd** (reported by a user) |
 | `goodixmoc` | Goodix (27c6) | untested - reports welcome |
 | `elanmoc` | Elan (04f3) | untested |
 | `fpcmoc` | FPC (10a5) | untested |

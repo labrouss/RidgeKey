@@ -46,7 +46,8 @@ Something not working? [Troubleshooting](troubleshooting.md).
 
 ## Supported readers
 
-Tested: **Synaptics 06cb:00f0** (HP EliteBook 840 G8, macOS Tahoe). RidgeKey also includes
+Working: **Synaptics 06cb:00f0** (HP EliteBook 840 G8, macOS Tahoe) and **06cb:00bd** (reported by a
+user). RidgeKey also includes
 libfprint's other match-on-chip drivers - Goodix, Elan, FPC, Egis, FocalTech, Realtek - untested
 so far; **Overview** marks such a reader "untested". Every release lists the exact USB IDs in
 `supported-devices.txt`, and the installer warns when none is connected. Reports for other
