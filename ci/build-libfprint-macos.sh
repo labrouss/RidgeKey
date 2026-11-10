@@ -283,9 +283,10 @@ done
 mkdir -p "$BUNDLE/launchd"
 cp "$REPO/launchd/"*.plist "$BUNDLE/launchd/"
 cp "$REPO/scripts/install.sh" "$REPO/scripts/uninstall.sh" "$REPO/scripts/ridgekey-sudo" \
-   "$REPO/scripts/ridgekey-sign" "$REPO/scripts/ridgekey-admin" "$REPO/scripts/typetest-as-daemon.sh" "$BUNDLE/"
+   "$REPO/scripts/ridgekey-sign" "$REPO/scripts/ridgekey-admin" "$REPO/scripts/ridgekey-update" \
+   "$REPO/scripts/typetest-as-daemon.sh" "$BUNDLE/"
 chmod 755 "$BUNDLE/install.sh" "$BUNDLE/uninstall.sh" "$BUNDLE/ridgekey-sudo" "$BUNDLE/ridgekey-sign" \
-  "$BUNDLE/ridgekey-admin" "$BUNDLE/typetest-as-daemon.sh"
+  "$BUNDLE/ridgekey-admin" "$BUNDLE/ridgekey-update" "$BUNDLE/typetest-as-daemon.sh"
 for ex in $EXAMPLES; do
   [ -x "$WORK/libfprint/_build/examples/$ex" ] || die "example $ex not built"
   cp "$WORK/libfprint/_build/examples/$ex" "$BUNDLE/bin/"

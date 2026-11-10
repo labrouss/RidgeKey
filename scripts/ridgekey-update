@@ -1,0 +1,110 @@
+#!/bin/bash
+# ridgekey-update - check GitHub for a newer RidgeKey release; download, verify and install it.
+# SPDX-License-Identifier: MIT
+#
+#   ridgekey-update             check only (exit 0 = up to date, 3 = update available)
+#   ridgekey-update download    download RidgeKey-<ver>.pkg to ~/Downloads and verify its SHA-256
+#   ridgekey-update install     download, verify, then: sudo installer -pkg ... -target /
+#
+# Run as yourself, not with sudo - "install" asks for sudo only for the installer step.
+# Needs only what macOS ships: curl, plutil, shasum.
+set -euo pipefail
+
+REPO="labrouss/RidgeKey"
+API="https://api.github.com/repos/$REPO/releases/latest"
+RELEASES="https://github.com/$REPO/releases"
+DAEMON="/usr/local/ridgekey/bin/ridgekeyd"
+
+die()   { echo "ridgekey-update: $*" >&2; exit 1; }
+usage() { sed -n '5,9p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+MODE=check
+case "${1:-}" in
+  ""|check)            MODE=check ;;
+  download|--download) MODE=download ;;
+  install|--install)   MODE=install ;;
+  -h|--help|help)      usage 0 ;;
+  *)                   usage 2 ;;
+esac
+[ "$(id -u)" -ne 0 ] || [ "$MODE" = check ] || die "run as yourself, without sudo (install asks for it)"
+
+# 1.10.2 vs 1.9.0 -> 0 if $1 is newer than $2 (suffixes like -beta are ignored)
+newer() {
+  local IFS=. i a b
+  local -a x=(${1%%-*}) y=(${2%%-*})
+  for i in 0 1 2 3; do
+    a=${x[i]:-0}; b=${y[i]:-0}
+    [[ $a =~ ^[0-9]+$ ]] || a=0
+    [[ $b =~ ^[0-9]+$ ]] || b=0
+    (( 10#$a > 10#$b )) && return 0
+    (( 10#$a < 10#$b )) && return 1
+  done
+  return 1
+}
+
+INSTALLED=none
+[ -x "$DAEMON" ] && INSTALLED="$("$DAEMON" --version 2>/dev/null | awk '{print $2; exit}')"
+[ -n "$INSTALLED" ] || INSTALLED=none
+INSTALLED="${RK_PRETEND_VERSION:-$INSTALLED}"     # testing: RK_PRETEND_VERSION=0.9.0 ridgekey-update
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+CODE="$(curl -sS -L --max-time 30 -o "$TMP/release.json" -w '%{http_code}' \
+          -H 'Accept: application/vnd.github+json' -H "User-Agent: ridgekey-update/$INSTALLED" "$API")" \
+  || die "cannot reach GitHub"
+case "$CODE" in
+  200) ;;
+  404) echo "No RidgeKey release has been published yet ($RELEASES)."; exit 0 ;;
+  403|429) die "GitHub is rate-limiting this network - try again later" ;;
+  *) die "GitHub answered HTTP $CODE" ;;
+esac
+
+field() { plutil -extract "$1" raw -o - "$TMP/release.json" 2>/dev/null; }
+
+TAG="$(field tag_name)" || die "unexpected answer from GitHub"
+LATEST="${TAG#v}"
+PAGE="$(field html_url || echo "$RELEASES")"
+
+PKG_NAME="" PKG_URL="" SHA_URL=""
+i=0
+while NAME="$(field "assets.$i.name")"; do
+  URL="$(field "assets.$i.browser_download_url")"
+  case "$NAME" in
+    RidgeKey-*.pkg)        PKG_NAME="$NAME"; PKG_URL="$URL" ;;
+    RidgeKey-*.pkg.sha256) SHA_URL="$URL" ;;
+  esac
+  i=$((i + 1))
+done
+
+echo "Installed: $INSTALLED"
+echo "Latest:    $LATEST  ($PAGE)"
+
+if [ "$INSTALLED" != none ] && ! newer "$LATEST" "$INSTALLED"; then
+  echo "RidgeKey is up to date."
+  exit 0
+fi
+[ "$MODE" = check ] && { echo "Update available: ridgekey-update install"; exit 3; }
+
+[ -n "$PKG_URL" ] || die "release $TAG has no RidgeKey-*.pkg - see $PAGE"
+[ -n "$SHA_URL" ] || die "release $TAG has no checksum file - download it from $PAGE instead"
+
+echo "Downloading $PKG_NAME ..."
+curl -fsSL --max-time 600 -o "$TMP/$PKG_NAME" "$PKG_URL"        || die "download failed"
+curl -fsSL --max-time 30  -o "$TMP/$PKG_NAME.sha256" "$SHA_URL" || die "checksum download failed"
+WANT="$(awk '{print tolower($1); exit}' "$TMP/$PKG_NAME.sha256")"
+HAVE="$(shasum -a 256 "$TMP/$PKG_NAME" | awk '{print $1}')"
+[ "${#WANT}" -eq 64 ] && [ "$WANT" = "$HAVE" ] || die "checksum mismatch - the download was discarded"
+echo "Checksum OK ($HAVE)"
+
+if [ "$MODE" = download ]; then
+  DEST="$HOME/Downloads/$PKG_NAME"
+  mkdir -p "$HOME/Downloads"
+  mv -f "$TMP/$PKG_NAME" "$DEST"
+  echo "Saved $DEST - open it to install, or: sudo installer -pkg \"$DEST\" -target /"
+  exit 0
+fi
+
+echo "Installing (sudo asks for your password) ..."
+sudo /usr/sbin/installer -pkg "$TMP/$PKG_NAME" -target /
+echo "RidgeKey $LATEST installed. Your fingers and settings are kept."

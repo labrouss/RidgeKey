@@ -60,7 +60,7 @@ echo "==> Stopping and removing the daemon"
 launchctl bootout "system/$LABEL" 2>/dev/null || true
 rm -f "$PLIST"
 rm -rf "$DEST" /Applications/RidgeKey.app /Library/Security/SecurityAgentPlugins/RidgeKey.bundle
-for l in ridgekeyctl ridgekey-sudo ridgekey-admin; do [ -L "/usr/local/bin/$l" ] && rm -f "/usr/local/bin/$l"; done
+for l in ridgekeyctl ridgekey-sudo ridgekey-admin ridgekey-update; do [ -L "/usr/local/bin/$l" ] && rm -f "/usr/local/bin/$l"; done
 pkgutil --forget io.github.labrouss.ridgekey.pkg >/dev/null 2>&1 || true   # installed from the .pkg
 
 if [ $PURGE = 1 ]; then

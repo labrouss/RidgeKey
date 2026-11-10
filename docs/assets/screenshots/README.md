@@ -12,6 +12,7 @@ Screenshots used by the documentation pages (PNG, any size; shown at page width)
 | admin-dialogs.png | Admin Dialogs pane |
 | admin-prompt.png | The RidgeKey notice over a System Settings unlock |
 | finger-actions.png | Finger Actions pane with a few rules |
-| about.png | About pane (versions, links) |
+| about.png | About pane (versions, links, Updates section) |
+| updates.png | About → Updates with "RidgeKey x.y is available" (use updates.pretendVersion) |
 
 Capture a window: Cmd-Shift-4, Space, click the window (hold Option to drop the shadow).

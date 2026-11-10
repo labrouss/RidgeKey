@@ -281,6 +281,17 @@ else
 fi
 expect_rc 0 "sudo still works after upgrade" sudo -n true
 
+echo "== ridgekey-update"
+expect_rc 0 "installed and on the PATH" test -x /usr/local/bin/ridgekey-update
+expect_rc 0 "--help" ridgekey-update --help
+expect_rc 1 "refuses to download as root" sudo /usr/local/bin/ridgekey-update download
+set +e; UPD_OUT="$(ridgekey-update 2>&1)"; UPD_RC=$?; set -e
+echo "$UPD_OUT" | sed 's/^/       | /'
+case "$UPD_RC" in
+  0|3) pass "check against GitHub releases (exit $UPD_RC)" ;;
+  *)   echo "    (GitHub check not counted: exit $UPD_RC - network or rate limit on the runner)" ;;
+esac
+
 echo "== daemon log (tail)"
 sudo tail -30 /Library/Logs/RidgeKey/ridgekeyd.log 2>/dev/null || true
 
@@ -298,6 +309,7 @@ sudo security authorizationdb remove "$CIR" >/dev/null 2>&1 || true
 if grep -q pam_ridgekey /etc/pam.d/sudo_local 2>/dev/null; then fail "sudo_local still mentions pam_ridgekey"; else pass "sudo_local clean"; fi
 expect_rc 0 "sudo works after uninstall" sudo -n true
 [ ! -e /usr/local/ridgekey ] && pass "files removed" || fail "/usr/local/ridgekey still there"
+[ ! -L /usr/local/bin/ridgekey-update ] && pass "ridgekey-update link removed" || fail "ridgekey-update link left behind"
 if sudo launchctl print system/io.github.labrouss.ridgekey >/dev/null 2>&1; then fail "launchd job still loaded"; else pass "launchd job gone"; fi
 
 echo "== double-click installer (.pkg)"

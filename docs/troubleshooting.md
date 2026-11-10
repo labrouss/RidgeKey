@@ -88,6 +88,19 @@ tail -20 ~/Library/Logs/RidgeKey-agent.log           # lock screen / finger acti
 | Shortcut does not run | the name must match exactly; test with `shortcuts run "Name"` |
 | Double tap seen as single | tap a bit faster (taps must be < 0.7 s apart) |
 
+## Updates
+
+| Message (About → Updates, or `ridgekey-update`) | Fix |
+|---|---|
+| No internet connection / Cannot reach github.com | check the network, proxy or VPN; GitHub must be reachable |
+| GitHub is rate-limiting requests | GitHub allows about 60 checks an hour per network without sign-in - try again later |
+| The download does not match the release's checksum | the file was damaged or altered and has been deleted - try again; if it repeats, [report it](https://github.com/labrouss/RidgeKey/issues/new) |
+| The release has no installer package / no checksum file | the release is incomplete - download from the [releases page](https://github.com/labrouss/RidgeKey/releases) |
+| Still says an update is available after installing | quit and reopen RidgeKey (the running app is still the old one) |
+| Installer refuses to open the package | right-click it in Downloads → **Open**, or Privacy & Security → **Open Anyway** |
+| `run as yourself, without sudo` | run `ridgekey-update install` without `sudo`; it asks for sudo itself |
+| Never offered pre-releases | by design: only full releases count as "latest" |
+
 ## Report a problem
 
 **RidgeKey** → **About** shows the app and `ridgekeyd` versions (they should match) and has a

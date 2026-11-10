@@ -12,8 +12,13 @@ enum RK {
     static let docs = URL(string: "https://labrouss.github.io/RidgeKey/")!
     static let repo = URL(string: "https://github.com/labrouss/RidgeKey")!
     static let newIssue = URL(string: "https://github.com/labrouss/RidgeKey/issues/new")!
+    /// "install" -> .../install.html, "install#updates" -> .../install.html#updates
     static func docs(_ page: String) -> URL {
-        page.isEmpty ? docs : docs.appendingPathComponent(page + ".html")
+        if page.isEmpty { return docs }
+        let parts = page.split(separator: "#", maxSplits: 1).map(String.init)
+        let url = docs.appendingPathComponent(parts[0] + ".html")
+        guard parts.count == 2 else { return url }
+        return URL(string: url.absoluteString + "#" + parts[1]) ?? url
     }
     static let fingerprintRule = "io.github.labrouss.ridgekey.fingerprint"
 

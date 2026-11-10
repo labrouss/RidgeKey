@@ -3,7 +3,7 @@
 #
 # Installs:
 #   /usr/local/ridgekey/{bin,lib}                       daemon, client, bundled libraries
-#   /usr/local/bin/ridgekeyctl, ridgekey-sudo           symlinks
+#   /usr/local/bin/ridgekeyctl, ridgekey-sudo, -admin, -update   symlinks
 #   /usr/local/ridgekey/lib/pam/pam_ridgekey.so         PAM module (sudo is NOT changed - run
 #                                                       'sudo ridgekey-sudo enable' for that)
 #   /Library/LaunchDaemons/io.github.labrouss.ridgekey.plist
@@ -49,6 +49,7 @@ cp -R "$SRC/bin" "$SRC/lib" "$DEST.new/"
 cp "$SRC/BUILDINFO.txt" "$DEST.new/" 2>/dev/null || true
 install -m 755 "$SRC/ridgekey-sudo" "$DEST.new/bin/ridgekey-sudo"
 [ -f "$SRC/ridgekey-admin" ] && install -m 755 "$SRC/ridgekey-admin" "$DEST.new/bin/ridgekey-admin"
+[ -f "$SRC/ridgekey-update" ] && install -m 755 "$SRC/ridgekey-update" "$DEST.new/bin/ridgekey-update"
 chown -R root:wheel "$DEST.new"
 chmod -R go-w "$DEST.new"
 chmod 444 "$DEST.new/lib/pam/pam_ridgekey.so"
@@ -101,6 +102,7 @@ mkdir -p /usr/local/bin
 ln -sf "$DEST/bin/ridgekeyctl" /usr/local/bin/ridgekeyctl
 ln -sf "$DEST/bin/ridgekey-sudo" /usr/local/bin/ridgekey-sudo
 [ -x "$DEST/bin/ridgekey-admin" ] && ln -sf "$DEST/bin/ridgekey-admin" /usr/local/bin/ridgekey-admin
+[ -x "$DEST/bin/ridgekey-update" ] && ln -sf "$DEST/bin/ridgekey-update" /usr/local/bin/ridgekey-update
 
 AUTH_PLUGINS=/Library/Security/SecurityAgentPlugins
 if [ -d "$SRC/RidgeKey.bundle" ]; then

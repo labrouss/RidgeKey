@@ -33,6 +33,7 @@ macOS would ask for your password. Built on [libfprint](https://fprint.freedeskt
 | ⌨️ **Approve `sudo`** in Terminal | [sudo](https://labrouss.github.io/RidgeKey/sudo.html) |
 | 👆 **Finger actions** - tap, double/triple tap or hold a finger to lock the screen or run a Shortcut | [Finger actions](https://labrouss.github.io/RidgeKey/finger-actions.html) |
 | 🗂️ **Manage fingerprints** - enroll with live progress, delete, confirmed by a finger or your password | [Fingerprints](https://labrouss.github.io/RidgeKey/fingerprints.html) |
+| 🔄 **Stay up to date** - check, download and verify new releases from the app or `ridgekey-update` | [Updates](https://labrouss.github.io/RidgeKey/install.html#updates) |
 
 Your password **always keeps working**: a wrong finger, a timeout or **Use Password** brings back
 the normal macOS prompt.
@@ -57,8 +58,9 @@ the normal macOS prompt.
 3. Open **RidgeKey** from Applications → **Fingerprints** → **Enroll…**, then switch on the
    features you want.
 
-Upgrades keep your fingers and settings. Terminal install, uninstall and details:
-[Install guide](https://labrouss.github.io/RidgeKey/install.html).
+**Updating:** RidgeKey 1.1 and later check for new releases themselves - **About → Updates**, or
+`ridgekey-update install` in Terminal. Upgrades keep your fingers and settings. Terminal install,
+uninstall and details: [Install guide](https://labrouss.github.io/RidgeKey/install.html).
 
 ## Supported readers
 

@@ -50,7 +50,35 @@ sudo ./install.sh
 
 ## Upgrade
 
-Install the new version the same way. Your enrolled fingers, stored password, finger actions and
+### From the app (1.1 and later) {#updates}
+
+**RidgeKey** → **About** → **Updates**, or **RidgeKey** menu → **Check for Updates…**
+
+1. **Check Now** asks GitHub for the latest release. When one is newer, **About** in the sidebar
+   gets a badge and **Overview** shows "RidgeKey x.y is available".
+2. **Download** saves `RidgeKey-<version>.pkg` to your Downloads folder and checks it against the
+   release's SHA-256 checksum. A file that doesn't match is deleted.
+3. **Install…** opens it in Installer, which asks for an administrator's password as usual.
+
+{% include screenshot.html name="updates" alt="About - Updates" %}
+
+**Check for updates automatically** (on by default) checks at most every 6 hours, when the app
+opens. Nothing is downloaded or installed without you clicking.
+
+### From Terminal
+
+```sh
+ridgekey-update            # check (exit 0 = up to date, 3 = update available)
+ridgekey-update download   # save the verified package to ~/Downloads
+ridgekey-update install    # download, verify and install (asks for sudo)
+```
+
+Run it as yourself, not with `sudo`. Problems: [Troubleshooting → Updates](troubleshooting.md#updates).
+
+### Manually
+
+Download the package from the [releases page](https://github.com/labrouss/RidgeKey/releases) and
+install it the same way as the first time. Your enrolled fingers, stored password, finger actions and
 enabled features are kept:
 
 - `sudo` keeps working during the upgrade (the files are swapped in one step).

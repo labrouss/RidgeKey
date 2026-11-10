@@ -26,7 +26,7 @@ How RidgeKey is built, tested and put together. For using RidgeKey, start at [Ho
 | RidgeKey Agent | `src/agent/` | per-user agent: types the stored password into the lock screen, runs finger actions |
 | `pam_ridgekey.so` | `src/pam/` | PAM module for `sudo` (`/etc/pam.d/sudo_local`) |
 | `RidgeKey.bundle` | `src/authplugin/` | authorization plugin for admin dialogs |
-| scripts | `scripts/` | `install.sh`, `uninstall.sh`, `ridgekey-sudo`, `ridgekey-admin`, `ridgekey-sign`, `build-app.sh`, `build-pkg.sh` |
+| scripts | `scripts/` | `install.sh`, `uninstall.sh`, `ridgekey-sudo`, `ridgekey-admin`, `ridgekey-update`, `ridgekey-sign`, `build-app.sh`, `build-pkg.sh` |
 | libfprint patches | `patches/libfprint/` | macOS build fixes and the never-erase-everything guards |
 
 Protocol, permissions and every XPC request: [Technical reference](ridgekeyd.md).
@@ -58,6 +58,21 @@ bash scripts/build-app.sh            # RidgeKey.app
 
 Artifacts: `RidgeKey-<ver>-pkg` and `ridgekey-<ver>-macos-x86_64-bundle`. Tags `v*` publish a
 release.
+
+## Releases and the updater
+
+The app (`app/Sources/RidgeKey/Updater.swift`) and `ridgekey-update` read
+`api.github.com/repos/labrouss/RidgeKey/releases/latest`. For a release to be offered:
+
+- the tag is `v<major>.<minor>.<patch>` (compared numerically; `-suffix` tags are pre-releases and
+  never "latest"),
+- it has `RidgeKey-<version>.pkg` **and** `RidgeKey-<version>.pkg.sha256` as assets - CI's release
+  job uploads both,
+- its version is newer than `RK_VERSION` of the installed app.
+
+To try the "update available" path with an up-to-date install:
+`defaults write io.github.labrouss.ridgekey.app updates.pretendVersion 0.9.0` (app; `defaults delete`
+to undo) or `RK_PRETEND_VERSION=0.9.0 ridgekey-update`.
 
 ## Design notes
 

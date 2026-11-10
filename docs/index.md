@@ -28,6 +28,7 @@ matched inside the reader), built on [libfprint](https://fprint.freedesktop.org/
 | Approve `sudo` in Terminal | sudo | [sudo](sudo.md) |
 | Approve admin dialogs (System Settings locks, installers) | Admin Dialogs | [Admin dialogs](admin-dialogs.md) |
 | Tap, double/triple tap or hold a finger to lock the screen or run a Shortcut | Finger Actions | [Finger actions](finger-actions.md) |
+| Keep RidgeKey up to date | About → Updates | [Updates](install.md#updates) |
 
 Your password **always keeps working**: every fingerprint feature falls back to it.
 

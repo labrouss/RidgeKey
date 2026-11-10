@@ -2,7 +2,10 @@
 
 All releases tested on the HP EliteBook 840 G8 (Synaptics 06cb:00f0, macOS Tahoe).
 
-## Unreleased
+## 1.1.0 - Updates
+- **Updates**: About → Updates (and **Check for Updates…** in the app menu) checks GitHub for a
+  newer release, downloads the package, verifies its SHA-256 and opens it in Installer. Optional
+  automatic check, at most every 6 hours. Terminal: `ridgekey-update [download|install]`.
 - Readers: Synaptics **06cb:00bd** reported working by a user.
 
 ## 1.0.0 - First production release

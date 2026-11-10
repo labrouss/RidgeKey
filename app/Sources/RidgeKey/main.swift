@@ -5,19 +5,29 @@ import SwiftUI
 
 struct RidgeKeyApp: App {
     @StateObject private var model = AppModel()
+    @StateObject private var updater = Updater()
 
     var body: some Scene {
         WindowGroup("RidgeKey") {
             ContentView()
                 .environmentObject(model)
+                .environmentObject(updater)
                 .frame(minWidth: 720, minHeight: 480)
         }
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    updater.showAbout = true
+                    Task { await updater.check() }
+                }
+                .disabled(updater.busy)
+            }
             CommandGroup(replacing: .help) {
                 Button("RidgeKey Help") { NSWorkspace.shared.open(RK.docs) }
                     .keyboardShortcut("?", modifiers: .command)
                 Button("Install & Upgrade") { NSWorkspace.shared.open(RK.docs("install")) }
+                Button("Updates") { NSWorkspace.shared.open(RK.docs("install#updates")) }
                 Button("Troubleshooting") { NSWorkspace.shared.open(RK.docs("troubleshooting")) }
                 Divider()
                 Button("Report an Issue…") { NSWorkspace.shared.open(RK.newIssue) }

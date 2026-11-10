@@ -22,7 +22,8 @@ enum Pane: String, CaseIterable, Identifiable {
     /// The documentation page for this pane.
     var helpPage: String {
         switch self {
-        case .overview, .about: return ""
+        case .overview: return ""
+        case .about: return "install#updates"
         case .fingerprints: return "fingerprints"
         case .actions: return "finger-actions"
         case .lockScreen: return "lock-screen"
@@ -46,18 +47,20 @@ enum Pane: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var updater: Updater
     @State private var selection: Pane? = .overview
 
     var body: some View {
         NavigationSplitView {
             List(Pane.allCases, selection: $selection) { pane in
                 Label(pane.title, systemImage: pane.icon).tag(pane)
+                    .badge(pane == .about && updater.updateAvailable ? 1 : 0)
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 190)
         } detail: {
             Group {
                 switch selection ?? .overview {
-                case .overview: OverviewView()
+                case .overview: OverviewView(showAbout: { selection = .about })
                 case .fingerprints: FingerprintsView()
                 case .lockScreen: LockScreenView()
                 case .actions: ActionsView()
@@ -89,6 +92,12 @@ struct ContentView: View {
             }
         }
         .task { await model.refresh() }
+        .task { await updater.checkOnLaunch() }
+        .onReceive(updater.$showAbout) { show in
+            guard show else { return }
+            selection = .about
+            DispatchQueue.main.async { updater.showAbout = false }
+        }
         .sheet(item: $model.activity) { ActivitySheet(action: $0) }
     }
 }
@@ -132,9 +141,21 @@ struct StatusRow: View {
 
 struct OverviewView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var updater: Updater
+    var showAbout: () -> Void = {}
 
     var body: some View {
         Form {
+            if updater.updateAvailable, let l = updater.latest {
+                Section {
+                    LabeledContent {
+                        Button("Update…", action: showAbout)
+                    } label: {
+                        Label("RidgeKey \(l.version) is available", systemImage: "arrow.down.circle.fill")
+                            .foregroundStyle(.blue)
+                    }
+                }
+            }
             Section("Service") {
                 StatusRow(title: "ridgekeyd",
                           detail: model.reachable ? "running \(model.version)" : "not running",
@@ -557,6 +578,7 @@ struct AboutView: View {
                 Link("Report an issue", destination: RK.newIssue)
                 Link("github.com/labrouss/RidgeKey", destination: RK.repo)
             }
+            UpdatesSection()
             Section {
                 Text("Fingerprint unlock for macOS on laptops with match-on-chip readers (Synaptics, "
                      + "Goodix, Elan, FPC, Egis, FocalTech, Realtek), "
@@ -572,5 +594,79 @@ struct AboutView: View {
 
     private var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
+}
+
+// MARK: - Updates (About)
+
+struct UpdatesSection: View {
+    @EnvironmentObject var updater: Updater
+
+    var body: some View {
+        Section("Updates") {
+            status
+            Toggle("Check for updates automatically", isOn: $updater.autoCheck)
+            HStack {
+                Button("Check Now") { Task { await updater.check() } }
+                    .disabled(updater.busy)
+                Spacer()
+                if let last = updater.lastChecked {
+                    Text("Last checked \(last.formatted(.relative(presentation: .named)))")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            Text("Checks the releases on github.com/labrouss/RidgeKey. The download is verified against "
+                 + "the release's SHA-256 checksum, then Installer opens and asks for an administrator's "
+                 + "password as usual. Your fingers and settings are kept.")
+                .font(.footnote).foregroundStyle(.secondary)
+            Link("How updates work", destination: RK.docs("install#updates"))
+                .font(.footnote)
+        }
+    }
+
+    @ViewBuilder private var status: some View {
+        switch updater.phase {
+        case .idle:
+            LabeledContent("Status", value: "not checked yet")
+        case .checking:
+            LabeledContent("Status") { HStack(spacing: 6) { ProgressView().controlSize(.small); Text("checking GitHub…") } }
+        case .upToDate:
+            StatusRow(title: "Status",
+                      detail: updater.latest.map { "up to date (latest \($0.version))" } ?? "up to date - no release published yet",
+                      state: .good)
+        case .available:
+            if let l = updater.latest {
+                LabeledContent {
+                    HStack {
+                        Link("Release notes", destination: l.page)
+                        Button("Download \(ByteCountFormatter.string(fromByteCount: Int64(l.pkgSize), countStyle: .file))") {
+                            Task { await updater.download() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                } label: {
+                    Label("RidgeKey \(l.version) is available (you have \(updater.installed))",
+                          systemImage: "arrow.down.circle.fill")
+                }
+            }
+        case .downloading:
+            LabeledContent("Status") { HStack(spacing: 6) { ProgressView().controlSize(.small); Text("downloading and verifying…") } }
+        case .ready(let pkg):
+            LabeledContent {
+                HStack {
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([pkg]) }
+                    Button("Install…") { updater.install(pkg) }
+                        .buttonStyle(.borderedProminent)
+                }
+            } label: {
+                Label("\(pkg.lastPathComponent) downloaded and verified", systemImage: "checkmark.seal.fill")
+            }
+        case .failed(let message):
+            LabeledContent {
+                Link("Releases page", destination: Updater.releases)
+            } label: {
+                Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            }
+        }
     }
 }
