@@ -53,8 +53,10 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             List(Pane.allCases, selection: $selection) { pane in
-                Label(pane.title, systemImage: pane.icon).tag(pane)
+                // .tag must be the outermost modifier: List matches clicks to $selection by it.
+                Label(pane.title, systemImage: pane.icon)
                     .badge(pane == .about && updater.updateAvailable ? 1 : 0)
+                    .tag(pane)
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 190)
         } detail: {

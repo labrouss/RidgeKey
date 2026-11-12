@@ -2,6 +2,10 @@
 
 All releases tested on the HP EliteBook 840 G8 (Synaptics 06cb:00f0, macOS Tahoe).
 
+## 1.1.1 - Fix
+- App: the sidebar did not respond to clicks in 1.1.0 (the update badge hid each row's selection
+  tag).
+
 ## 1.1.0 - Updates
 - **Updates**: About → Updates (and **Check for Updates…** in the app menu) checks GitHub for a
   newer release, downloads the package, verifies its SHA-256 and opens it in Installer. Optional
